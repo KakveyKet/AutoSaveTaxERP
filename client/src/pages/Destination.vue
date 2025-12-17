@@ -20,6 +20,7 @@
           variant="solo-filled"
           style="max-width: 300px;"
           class="me-2"
+          @update:model-value="loadItems({ page: 1, itemsPerPage })"
         ></v-text-field>
 
         <!-- Create Button -->
@@ -103,8 +104,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
-import api from '@/api';
+import { ref, onMounted, onUnmounted } from 'vue';
+import api, { socket } from '@/api'; // Import socket
 import DestinationForm from '@/form/DestinationForm.vue';
 
 // State
@@ -127,9 +128,9 @@ const snackbar = ref({
 
 // Table Headers
 const headers = [
-  { title: 'ID', key: 'id', align: 'start' },
-  { title: 'Name', key: 'name' },
-  { title: 'Status', key: 'status' },
+  { title: 'ID', key: 'id', align: 'start', sortable: true },
+  { title: 'Name', key: 'name', sortable: true },
+  { title: 'Status', key: 'status', sortable: true },
   { title: 'Created By', key: 'created_by_name', sortable: false },
   { title: 'Actions', key: 'actions', sortable: false },
 ];
@@ -166,18 +167,32 @@ const closeForm = () => {
 // 4. Handle Save Success
 const onSaved = () => { 
   closeForm(); 
+  // We reload here for immediate feedback, but socket will also trigger reload
   loadItems({ page: 1, itemsPerPage: itemsPerPage.value }); 
   showToast('Destination saved successfully!', 'success');
 };
 
-// API Actions
-const loadItems = async ({ page, itemsPerPage } = {}) => {
+// API Actions (Updated for Sorting)
+const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
   const p = page || 1;
   const s = itemsPerPage || 10;
+  
+  // Transform Vuetify sortBy to Django ordering format
+  let ordering = '';
+  if (sortBy && sortBy.length > 0) {
+      const { key, order } = sortBy[0];
+      ordering = order === 'desc' ? `-${key}` : key;
+  }
+
   loading.value = true;
   try {
     const response = await api.get('destinations/', {
-      params: { page: p, page_size: s, search: search.value }
+      params: { 
+        page: p, 
+        page_size: s, 
+        search: search.value,
+        ordering: ordering
+      }
     });
     serverItems.value = response.data.results;
     totalItems.value = response.data.count;
@@ -197,6 +212,7 @@ const deleteItem = (item) => {
 const deleteItemConfirm = async () => {
   try {
     await api.delete(`destinations/${deletedItem.value.id}/`);
+    // Local reload, socket will handle others
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
     showToast('Destination deleted successfully!', 'success');
   } catch (e) { 
@@ -206,4 +222,23 @@ const deleteItemConfirm = async () => {
     dialogDelete.value = false;
   }
 };
+
+// --- SOCKET INTEGRATION ---
+onMounted(() => {
+  // Ensure socket is connected
+  if (!socket.connected) {
+    socket.connect();
+  }
+
+  // Listen for real-time updates
+  socket.on('destination_update', (data) => {
+    // When backend emits 'destination_update', reload the table
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
+  });
+});
+
+onUnmounted(() => {
+  // Clean up listener to prevent duplicates if component re-mounts
+  socket.off('destination_update');
+});
 </script>

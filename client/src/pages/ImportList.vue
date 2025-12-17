@@ -5,6 +5,22 @@
         <v-icon icon="mdi-file-excel" class="me-2"></v-icon>
         Order Imports
         <v-spacer></v-spacer>
+        
+        <!-- Search Field -->
+        <v-text-field
+          v-model="search"
+          prepend-inner-icon="mdi-magnify"
+          density="compact"
+          label="Search filename"
+          single-line
+          flat
+          hide-details
+          variant="solo-filled"
+          style="max-width: 300px;"
+          class="me-2"
+          @update:model-value="loadItems({ page: 1, itemsPerPage })"
+        ></v-text-field>
+
         <v-btn color="primary" prepend-icon="mdi-cloud-upload" @click="dialogUpload = true">
           Import New File
         </v-btn>
@@ -12,8 +28,16 @@
 
       <v-divider></v-divider>
 
-      <v-data-table-server v-model:items-per-page="itemsPerPage" :headers="headers" :items="serverItems"
-        :items-length="totalItems" :loading="loading" item-value="id" @update:options="loadItems">
+      <v-data-table-server 
+        v-model:items-per-page="itemsPerPage" 
+        :headers="headers" 
+        :items="serverItems"
+        :items-length="totalItems" 
+        :loading="loading" 
+        :search="search"
+        item-value="id" 
+        @update:options="loadItems"
+      >
         <template v-slot:item.file="{ item }">
           <span class="font-weight-medium text-truncate" style="max-width: 200px; display: block;">
             {{ getFileName(item.file) }}
@@ -32,16 +56,12 @@
         </template>
 
         <template v-slot:item.actions="{ item }">
-          <!-- 1. Download Original -->
-          <!-- <v-btn icon="mdi-download" size="small" variant="text" color="primary" :href="item.file" target="_blank"
-            title="Download Excel"></v-btn> -->
-
-          <!-- 2. Run Bot -->
+          <!-- 1. Run Bot -->
           <v-btn icon="mdi-robot" size="small" variant="text" color="orange" @click="runBot(item)"
             title="Auto Download Invoices" :loading="item.bot_status === 'running'"
             :disabled="item.bot_status === 'running'"></v-btn>
 
-          <!-- 3. Download Result ZIP -->
+          <!-- 2. Download Result ZIP -->
           <v-btn v-if="item.generated_zip" icon="mdi-folder-zip" size="small" variant="text" color="success"
             :href="item.generated_zip" target="_blank" title="Download Invoices Zip"></v-btn>
 
@@ -53,7 +73,7 @@
       </v-data-table-server>
     </v-card>
 
-    <!-- Dialogs (Upload, Details, Delete) - Keeping existing ones -->
+    <!-- Dialogs (Upload, Details, Delete) -->
     <v-dialog v-model="dialogUpload" max-width="500px">
       <ImportForm @close="dialogUpload = false" @saved="onUploaded" />
     </v-dialog>
@@ -87,8 +107,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
-import api from '@/api';
+import { ref, onMounted, onUnmounted } from 'vue';
+import api, { socket } from '@/api'; // Import socket
 import ImportForm from '@/form/ImportForm.vue';
 
 const dialogUpload = ref(false);
@@ -96,17 +116,19 @@ const dialogDetails = ref(false);
 const dialogDelete = ref(false);
 const selectedImport = ref(null);
 const deletedItem = ref(null);
+const search = ref('');
 const serverItems = ref([]);
 const totalItems = ref(0);
 const loading = ref(false);
 const itemsPerPage = ref(10);
 const snackbar = ref({ show: false, text: '', color: 'success' });
 
+// Updated headers with sortable
 const headers = [
-  { title: 'ID', key: 'id', sortable: false },
-  { title: 'File Name', key: 'file', sortable: false },
-  { title: 'Uploaded At', key: 'uploaded_at' },
-  // { title: 'Status', key: 'bot_status' },
+  { title: 'ID', key: 'id', sortable: true },
+  { title: 'File Name', key: 'file', sortable: true },
+  { title: 'Uploaded At', key: 'uploaded_at', sortable: true },
+  // { title: 'Status', key: 'bot_status', sortable: true },
   { title: 'Actions', key: 'actions', sortable: false },
 ];
 
@@ -117,23 +139,43 @@ const detailHeaders = [
   { title: 'Forwarder', key: 'forwarder' },
 ];
 
-const loadItems = async ({ page, itemsPerPage }) => {
+// Updated loadItems with sorting & search
+const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
+  const p = page || 1;
+  const s = itemsPerPage || 10;
+  
+  let ordering = '';
+  if (sortBy && sortBy.length > 0) {
+      const { key, order } = sortBy[0];
+      ordering = order === 'desc' ? `-${key}` : key;
+  }
+
   loading.value = true;
   try {
-    const response = await api.get('orders/', { params: { page, page_size: itemsPerPage } });
+    const response = await api.get('orders/', { 
+      params: { 
+        page: p, 
+        page_size: s,
+        search: search.value,
+        ordering: ordering
+      } 
+    });
     serverItems.value = response.data.results;
     totalItems.value = response.data.count;
-  } catch (error) { console.error(error); }
+  } catch (error) { 
+    console.error(error); 
+    showToast('Failed to load data', 'error');
+  }
   finally { loading.value = false; }
 };
 
-// --- NEW FUNCTION: RUN BOT ---
+// --- RUN BOT ---
 const runBot = async (item) => {
   try {
     item.bot_status = 'running'; // Optimistic update
     await api.post(`orders/${item.id}/run_bot/`);
     showToast('Auto-download started in background', 'info');
-    // Poll for status or just wait for reload
+    // Socket will handle updates now
   } catch (error) {
     console.error('Bot start error:', error);
     showToast('Failed to start bot', 'error');
@@ -154,4 +196,24 @@ const deleteItem = (item) => { deletedItem.value = item; dialogDelete.value = tr
 const deleteItemConfirm = async () => { await api.delete(`orders/${deletedItem.value.id}/`); loadItems({ page: 1, itemsPerPage: itemsPerPage.value }); dialogDelete.value = false; };
 const getFileName = (path) => path ? path.split('/').pop() : '';
 const showToast = (text, color = 'success') => { snackbar.value = { show: true, text, color }; };
+
+// --- SOCKET.IO INTEGRATION ---
+onMounted(() => {
+  if (!socket.connected) socket.connect();
+
+  socket.on('order_update', (data) => {
+    // console.log("Order Update:", data);
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
+  });
+
+  socket.on('bot_update', (data) => {
+    // Optional: Could update specific row status directly for smoother UI
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
+  });
+});
+
+onUnmounted(() => {
+  socket.off('order_update');
+  socket.off('bot_update');
+});
 </script>

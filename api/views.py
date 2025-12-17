@@ -6,6 +6,7 @@ import mimetypes
 from django.http import HttpResponse
 from datetime import datetime, timedelta
 from django.utils import timezone
+import threading 
 from rest_framework import viewsets, permissions, filters, generics, status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser 
 from rest_framework.decorators import api_view, permission_classes, action
@@ -22,7 +23,10 @@ from .serializers import (
     DestinationSerializer, OrderImportSerializer, MyTokenObtainPairSerializer
 )
 from .bot import AutoDownloadBot
-
+# --- SOCKET IO IMPORTS ---
+from asgiref.sync import async_to_sync
+from server.sio import sio 
+# -------------------------
 class StandardPagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = 'page_size'
@@ -84,43 +88,87 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated, IsAdminOrSelf] 
     pagination_class = StandardPagination
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['username', 'email', 'role']
+    ordering_fields = ['id', 'username', 'email', 'role', 'created_at']
+
     def get_queryset(self):
         queryset = User.objects.all().order_by('-created_at')
         if self.action == 'list': return queryset.exclude(id=self.request.user.id)
         return queryset
+    
+    # --- Emit Events for Users ---
+    def perform_create(self, serializer):
+        serializer.save()
+        async_to_sync(sio.emit)('user_update', {'action': 'create'})
+
+    def perform_update(self, serializer):
+        serializer.save()
+        async_to_sync(sio.emit)('user_update', {'action': 'update'})
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        async_to_sync(sio.emit)('user_update', {'action': 'delete'})
 
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     permission_classes = (AllowAny,)
     serializer_class = RegisterSerializer
 
-class ForwarderViewSet(viewsets.ModelViewSet):
-    queryset = Forwarder.objects.all().order_by('-created_at')
-    serializer_class = ForwarderSerializer
-    permission_classes = [IsAuthenticated]
-    pagination_class = StandardPagination
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['name', 'status']
-    def perform_create(self, serializer): serializer.save(created_by=self.request.user)
-
 class DestinationViewSet(viewsets.ModelViewSet):
     queryset = Destination.objects.all().order_by('-created_at')
     serializer_class = DestinationSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = StandardPagination
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'status']
-    def perform_create(self, serializer): serializer.save(created_by=self.request.user)
+    ordering_fields = ['id', 'name', 'status', 'created_at']
+    
+    # --- Emit Events for Destinations ---
+    def perform_create(self, serializer): 
+        serializer.save(created_by=self.request.user)
+        async_to_sync(sio.emit)('destination_update', {'action': 'create'})
+
+    def perform_update(self, serializer):
+        serializer.save()
+        async_to_sync(sio.emit)('destination_update', {'action': 'update'})
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        async_to_sync(sio.emit)('destination_update', {'action': 'delete'})
+
+class ForwarderViewSet(viewsets.ModelViewSet):
+    queryset = Forwarder.objects.all().order_by('-created_at')
+    serializer_class = ForwarderSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = StandardPagination
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter] 
+    search_fields = ['name', 'status']
+    ordering_fields = ['id', 'name', 'status', 'created_at'] 
+    
+    # --- Emit Events for Forwarders ---
+    def perform_create(self, serializer): 
+        serializer.save(created_by=self.request.user)
+        async_to_sync(sio.emit)('forwarder_update', {'action': 'create'})
+
+    def perform_update(self, serializer):
+        serializer.save()
+        async_to_sync(sio.emit)('forwarder_update', {'action': 'update'})
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        async_to_sync(sio.emit)('forwarder_update', {'action': 'delete'})
+
+
 
 # class OrderImportViewSet(viewsets.ModelViewSet):
 #     serializer_class = OrderImportSerializer
 #     permission_classes = [IsAuthenticated]
 #     pagination_class = StandardPagination
 #     parser_classes = (MultiPartParser, FormParser, JSONParser)
-#     filter_backends = [filters.SearchFilter]
+#     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
 #     search_fields = ['file', 'uploaded_by__username']
+#     ordering_fields = ['id', 'uploaded_at', 'status', 'file']
 
 #     def get_queryset(self):
 #         queryset = OrderImport.objects.all().order_by('-uploaded_at')
@@ -130,17 +178,29 @@ class DestinationViewSet(viewsets.ModelViewSet):
 #         now = timezone.now()
         
 #         if period == 'daily':
-#             # Files uploaded today (since midnight)
 #             start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
 #             queryset = queryset.filter(uploaded_at__gte=start_date)
 #         elif period == 'weekly':
-#             # Last 7 days
 #             start_date = now - timedelta(days=7)
 #             queryset = queryset.filter(uploaded_at__gte=start_date)
 #         elif period == 'monthly':
-#             # Last 30 days
 #             start_date = now - timedelta(days=30)
 #             queryset = queryset.filter(uploaded_at__gte=start_date)
+#         elif period == 'custom':
+#             # --- NEW: Custom Range Logic ---
+#             start_str = self.request.query_params.get('start_date')
+#             end_str = self.request.query_params.get('end_date')
+            
+#             if not start_str and not end_str:
+#                 # Default to today if custom is selected but no dates provided
+#                 start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+#                 queryset = queryset.filter(uploaded_at__gte=start_date)
+#             else:
+#                 if start_str:
+#                     queryset = queryset.filter(uploaded_at__date__gte=start_str)
+#                 if end_str:
+#                     queryset = queryset.filter(uploaded_at__date__lte=end_str)
+#             # -------------------------------
             
 #         return queryset
 
@@ -179,10 +239,14 @@ class DestinationViewSet(viewsets.ModelViewSet):
 #                     if pd.isna(val): return ""
 #                     if isinstance(val, datetime): return val.strftime('%Y-%m-%d')
 #                     return str(val).strip()
+                
+#                 inv_num = clean(row.get('INVOICE NUMBER'))
+#                 if '-' in inv_num: continue
+
 #                 item = {
 #                     "no": clean(row.get('No.')),
 #                     "customer": clean(row.get('customer')),
-#                     "invoice_number": clean(row.get('INVOICE NUMBER')),
+#                     "invoice_number": inv_num,
 #                     "destination": clean(row.get('DESTINATION')),
 #                     "forwarder": clean(row.get('FORWARDER')),
 #                     "qty": row.get('QTY PCS', 0) if pd.notna(row.get('QTY PCS')) else 0,
@@ -234,24 +298,18 @@ class DestinationViewSet(viewsets.ModelViewSet):
 #         except Exception as e:
 #             return Response({'error': str(e)}, status=500)
 
-#     # --- NEW: Aggregated Stats Action ---
 #     @action(detail=False, methods=['get'])
 #     def report_stats(self, request):
-#         """
-#         Returns aggregated download stats based on 'period' filter.
-#         """
-#         queryset = self.get_queryset() # Uses the same date filter logic as the list
+#         queryset = self.get_queryset()
         
 #         total_files = 0
 #         total_invoices = 0
 #         total_downloaded = 0
         
-#         # Iterate to sum up JSON data (Doing this in Python as JSON aggregation in SQLite is limited)
 #         for order in queryset:
 #             total_files += 1
 #             if order.parsed_data and isinstance(order.parsed_data, list):
 #                 total_invoices += len(order.parsed_data)
-#                 # Count items with status='completed'
 #                 downloaded = sum(1 for item in order.parsed_data if item.get('status') == 'completed')
 #                 total_downloaded += downloaded
 
@@ -262,53 +320,56 @@ class DestinationViewSet(viewsets.ModelViewSet):
 #             'success_rate': round((total_downloaded / total_invoices * 100) if total_invoices > 0 else 0, 1)
 #         })
 
-# class SystemSettingView(APIView):
-#     permission_classes = [IsAuthenticated]
-#     def get(self, request):
-#         setting, created = SystemSetting.objects.get_or_create(id=1)
-#         serializer = SystemSettingSerializer(setting)
-#         return Response(serializer.data)
-#     def put(self, request):
-#         setting, created = SystemSetting.objects.get_or_create(id=1)
-#         serializer = SystemSettingSerializer(setting, data=request.data)
-#         if serializer.is_valid():
-#             serializer.save()
-#             return Response(serializer.data)
-#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class OrderImportViewSet(viewsets.ModelViewSet):
     serializer_class = OrderImportSerializer
     permission_classes = [IsAuthenticated]
     pagination_class = StandardPagination
     parser_classes = (MultiPartParser, FormParser, JSONParser)
-    filter_backends = [filters.SearchFilter]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['file', 'uploaded_by__username']
+    ordering_fields = ['id', 'uploaded_at', 'status', 'file']
 
     def get_queryset(self):
         queryset = OrderImport.objects.all().order_by('-uploaded_at')
         
-        # Date Filtering logic
         period = self.request.query_params.get('period')
         now = timezone.now()
         
         if period == 'daily':
-            # Files uploaded today (since midnight)
             start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
             queryset = queryset.filter(uploaded_at__gte=start_date)
         elif period == 'weekly':
-            # Last 7 days
             start_date = now - timedelta(days=7)
             queryset = queryset.filter(uploaded_at__gte=start_date)
         elif period == 'monthly':
-            # Last 30 days
             start_date = now - timedelta(days=30)
             queryset = queryset.filter(uploaded_at__gte=start_date)
+        elif period == 'custom':
+            start_str = self.request.query_params.get('start_date')
+            end_str = self.request.query_params.get('end_date')
+            
+            if not start_str and not end_str:
+                start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                queryset = queryset.filter(uploaded_at__gte=start_date)
+            else:
+                if start_str:
+                    queryset = queryset.filter(uploaded_at__date__gte=start_str)
+                if end_str:
+                    queryset = queryset.filter(uploaded_at__date__lte=end_str)
             
         return queryset
 
     def perform_create(self, serializer):
+        # Save initial record
         instance = serializer.save(uploaded_by=self.request.user)
-        self.process_file(instance)
+        
+        # Notify clients that a new file is processing
+        async_to_sync(sio.emit)('order_update', {'action': 'create', 'id': instance.id, 'status': 'processing'})
+
+        # Run processing in background thread
+        t = threading.Thread(target=self.process_file, args=(instance,))
+        t.start()
 
     def perform_destroy(self, instance):
         if instance.file: instance.file.delete(save=False)
@@ -317,7 +378,10 @@ class OrderImportViewSet(viewsets.ModelViewSet):
         if os.path.exists(temp_dir):
             try: shutil.rmtree(temp_dir)
             except Exception as e: print(f"Error deleting temp: {e}")
+        
         instance.delete()
+        # Notify clients
+        async_to_sync(sio.emit)('order_update', {'action': 'delete', 'id': instance.id})
 
     def process_file(self, instance):
         try:
@@ -332,22 +396,24 @@ class OrderImportViewSet(viewsets.ModelViewSet):
             if header_row_index == -1:
                 instance.parsed_data = {"error": "Could not find 'INVOICE NUMBER' header."}
                 instance.save()
+                # Notify Error
+                async_to_sync(sio.emit)('order_update', {'action': 'error', 'id': instance.id, 'message': 'Header not found'})
                 return
+            
             df = pd.read_excel(file_path, header=header_row_index)
             valid_rows = df[df['INVOICE NUMBER'].notna()]
             extracted_data = []
-            for _, row in valid_rows.iterrows():
+            
+            # --- REAL-TIME INSERTION LOOP ---
+            total_rows = len(valid_rows)
+            for index, (_, row) in enumerate(valid_rows.iterrows()):
                 def clean(val):
                     if pd.isna(val): return ""
                     if isinstance(val, datetime): return val.strftime('%Y-%m-%d')
                     return str(val).strip()
                 
                 inv_num = clean(row.get('INVOICE NUMBER'))
-                
-                # --- FILTER LOGIC: Skip if hyphen exists ---
-                if '-' in inv_num:
-                    continue
-                # -------------------------------------------
+                if '-' in inv_num: continue
 
                 item = {
                     "no": clean(row.get('No.')),
@@ -358,20 +424,39 @@ class OrderImportViewSet(viewsets.ModelViewSet):
                     "qty": row.get('QTY PCS', 0) if pd.notna(row.get('QTY PCS')) else 0,
                     "amount": row.get('AMOUNT INV (USD)', 0) if pd.notna(row.get('AMOUNT INV (USD)')) else 0,
                     "eta": clean(row.get('ETA')),
-                    "via": clean(row.get('VIA'))
+                    "via": clean(row.get('VIA')),
+                    "status": "pending" # Initial status
                 }
                 extracted_data.append(item)
+                
+                # Save every 5 rows to be efficient but still "real-time"
+                if index % 5 == 0:
+                    instance.parsed_data = extracted_data
+                    instance.save()
+                    # Emit progress update (optional, might be too noisy if list is huge)
+                    # async_to_sync(sio.emit)('order_progress', {'id': instance.id, 'processed': index, 'total': total_rows})
+            
+            # Final save
             instance.parsed_data = extracted_data
             instance.save()
+            
+            # Notify Completion
+            async_to_sync(sio.emit)('order_update', {'action': 'processed', 'id': instance.id})
+
         except Exception as e:
             instance.parsed_data = {"error": str(e)}
             instance.save()
+            async_to_sync(sio.emit)('order_update', {'action': 'error', 'id': instance.id, 'message': str(e)})
 
     @action(detail=True, methods=['post'])
     def run_bot(self, request, pk=None):
         order = self.get_object()
         order.bot_status = 'running'
         order.save()
+        
+        # Notify Start
+        async_to_sync(sio.emit)('bot_update', {'type': 'status_change', 'order_id': order.id, 'status': 'running', 'message': 'Bot starting...'})
+
         config = request.data
         bot = AutoDownloadBot(order, config)
         bot.run()
@@ -404,24 +489,17 @@ class OrderImportViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
-    # --- NEW: Aggregated Stats Action ---
     @action(detail=False, methods=['get'])
     def report_stats(self, request):
-        """
-        Returns aggregated download stats based on 'period' filter.
-        """
-        queryset = self.get_queryset() # Uses the same date filter logic as the list
-        
+        queryset = self.get_queryset()
         total_files = 0
         total_invoices = 0
         total_downloaded = 0
         
-        # Iterate to sum up JSON data (Doing this in Python as JSON aggregation in SQLite is limited)
         for order in queryset:
             total_files += 1
             if order.parsed_data and isinstance(order.parsed_data, list):
                 total_invoices += len(order.parsed_data)
-                # Count items with status='completed'
                 downloaded = sum(1 for item in order.parsed_data if item.get('status') == 'completed')
                 total_downloaded += downloaded
 

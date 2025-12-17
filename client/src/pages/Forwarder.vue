@@ -20,6 +20,7 @@
           variant="solo-filled"
           style="max-width: 300px;"
           class="me-2"
+          @update:model-value="loadItems({ page: 1, itemsPerPage })" 
         ></v-text-field>
 
         <!-- New Forwarder Button -->
@@ -66,7 +67,6 @@
     </v-card>
 
     <!-- FORM POPUP (Dialog) -->
-    <!-- Instead of v-if/v-else switching views, we use v-dialog -->
     <v-dialog v-model="dialogForm" max-width="800px" persistent>
       <ForwarderForm 
         v-if="dialogForm"
@@ -104,12 +104,12 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import ForwarderForm from '@/form/ForwarderForm.vue'; 
-import api from '@/api'; // Using your existing import path
+import api, { socket } from '@/api'; // Import socket
 
 // --- State ---
-const dialogForm = ref(false); // Controls the form popup
+const dialogForm = ref(false); 
 const selectedId = ref(null);
 const search = ref('');
 const serverItems = ref([]);
@@ -119,73 +119,46 @@ const itemsPerPage = ref(10);
 const dialogDelete = ref(false);
 const deletedItem = ref(null);
 
-// Toast State
-const snackbar = ref({
-  show: false,
-  text: '',
-  color: 'success'
-});
+const snackbar = ref({ show: false, text: '', color: 'success' });
 
-// Headers
 const headers = [
-  { title: 'ID', key: 'id', align: 'start' },
-  { title: 'Name', key: 'name' },
-  { title: 'Status', key: 'status' },
+  { title: 'No', key: 'id', align: 'start', sortable: true },
+  { title: 'Name', key: 'name', sortable: true },
+  { title: 'Status', key: 'status', sortable: true },
   { title: 'Created By', key: 'created_by_name', sortable: false },
   { title: 'Actions', key: 'actions', sortable: false },
 ];
 
-// --- Helper: Show Toast ---
 const showToast = (message, color = 'success') => {
-  snackbar.value = {
-    show: true,
-    text: message,
-    color: color
-  };
+  snackbar.value = { show: true, text: message, color: color };
 };
 
 // --- Actions ---
+const openCreate = () => { selectedId.value = null; dialogForm.value = true; };
+const openEdit = (item) => { selectedId.value = item.id; dialogForm.value = true; };
+const closeForm = () => { dialogForm.value = false; selectedId.value = null; };
 
-// 1. Open Create Popup
-const openCreate = () => {
-  selectedId.value = null; 
-  dialogForm.value = true;
-};
-
-// 2. Open Edit Popup
-const openEdit = (item) => {
-  selectedId.value = item.id; 
-  dialogForm.value = true;
-};
-
-// 3. Close Popup
-const closeForm = () => {
-  dialogForm.value = false;
-  selectedId.value = null;
-};
-
-// 4. Handle Save Success
 const onSaved = () => {
   closeForm();
   loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
   showToast('Forwarder saved successfully!', 'success');
 };
 
-// 5. Load Data
-const loadItems = async ({ page, itemsPerPage } = {}) => {
+const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
   const p = page || 1;
   const s = itemsPerPage || 10;
+  
+  let ordering = '';
+  if (sortBy && sortBy.length > 0) {
+      const { key, order } = sortBy[0];
+      ordering = order === 'desc' ? `-${key}` : key;
+  }
 
   loading.value = true;
   try {
     const response = await api.get('forwarders/', {
-      params: {
-        page: p,
-        page_size: s,
-        search: search.value,
-      },
+      params: { page: p, page_size: s, search: search.value, ordering: ordering },
     });
-    
     serverItems.value = response.data.results;
     totalItems.value = response.data.count;
   } catch (error) {
@@ -196,11 +169,7 @@ const loadItems = async ({ page, itemsPerPage } = {}) => {
   }
 };
 
-// 6. Delete Logic
-const deleteItem = (item) => {
-  deletedItem.value = item;
-  dialogDelete.value = true;
-};
+const deleteItem = (item) => { deletedItem.value = item; dialogDelete.value = true; };
 
 const deleteItemConfirm = async () => {
   try {
@@ -214,4 +183,18 @@ const deleteItemConfirm = async () => {
     dialogDelete.value = false;
   }
 };
+
+// --- SOCKET.IO INTEGRATION ---
+onMounted(() => {
+  if (!socket.connected) socket.connect();
+
+  socket.on('forwarder_update', (data) => {
+    // console.log("Real-time Update:", data);
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
+  });
+});
+
+onUnmounted(() => {
+  socket.off('forwarder_update');
+});
 </script>

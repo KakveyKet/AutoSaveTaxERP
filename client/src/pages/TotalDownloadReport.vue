@@ -9,21 +9,47 @@
 
       <v-card-text>
         <!-- Period Filter -->
-        <v-row class="mb-2">
-            <v-col cols="12" sm="12" class="d-flex justify-center">
+        <v-row class="mb-2 justify-center">
+            <v-col cols="12" class="d-flex flex-column align-center">
                 <v-btn-toggle
                     v-model="selectedPeriod"
                     color="primary"
                     variant="outlined"
                     divided
                     mandatory
-                    @update:model-value="refreshData"
+                    class="mb-4"
+                    @update:model-value="onPeriodChange"
                 >
                     <v-btn value="">All Time</v-btn>
                     <v-btn value="daily">Today</v-btn>
                     <v-btn value="weekly">This Week</v-btn>
                     <v-btn value="monthly">This Month</v-btn>
+                    <v-btn value="custom">Custom Range</v-btn> <!-- NEW -->
                 </v-btn-toggle>
+
+                <!-- Custom Date Inputs (Visible only when 'custom' is selected) -->
+                <div v-if="selectedPeriod === 'custom'" class="d-flex align-center gap-4" style="gap: 16px">
+                    <v-text-field
+                        v-model="startDate"
+                        label="Start Date"
+                        type="date"
+                        density="compact"
+                        variant="outlined"
+                        hide-details
+                        style="width: 160px"
+                    ></v-text-field>
+                    <span class="text-h6">-</span>
+                    <v-text-field
+                        v-model="endDate"
+                        label="End Date"
+                        type="date"
+                        density="compact"
+                        variant="outlined"
+                        hide-details
+                        style="width: 160px"
+                    ></v-text-field>
+                    <v-btn color="primary" @click="refreshData" prepend-icon="mdi-filter">Apply</v-btn>
+                </div>
             </v-col>
         </v-row>
 
@@ -92,23 +118,18 @@
                 </template>
              </v-progress-linear>
         </template>
-
-        <!-- Status -->
-        <!-- <template v-slot:item.bot_status="{ item }">
-            <v-chip size="x-small" :color="getBotColor(item.bot_status)" label class="text-uppercase font-weight-bold">
-                {{ item.bot_status }}
-            </v-chip>
-        </template> -->
       </v-data-table-server>
     </v-card>
   </v-container>
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted } from 'vue';
 import api from '@/api';
 
-const selectedPeriod = ref(''); // Default: All Time
+const selectedPeriod = ref(''); 
+const startDate = ref(''); // NEW
+const endDate = ref('');   // NEW
 const search = ref('');
 const serverItems = ref([]);
 const totalItems = ref(0);
@@ -120,20 +141,42 @@ const headers = [
     { title: 'Date', key: 'uploaded_at', width: '20%' },
     { title: 'File Name', key: 'file' },
     { title: 'Download Progress', key: 'download_progress', sortable: false, width: '25%' },
-    // { title: 'Status', key: 'bot_status', align: 'center', width: '15%' },
 ];
 
-const loadItems = async ({ page, itemsPerPage }) => {
+const onPeriodChange = () => {
+    // If user selects "Custom", don't refresh immediately (wait for them to pick dates)
+    if (selectedPeriod.value !== 'custom') {
+        refreshData();
+    }
+};
+
+const getQueryParams = () => {
+    const params = {
+        period: selectedPeriod.value,
+        search: search.value
+    };
+    // Add dates if custom period is selected
+    if (selectedPeriod.value === 'custom') {
+        if (startDate.value) params.start_date = startDate.value;
+        if (endDate.value) params.end_date = endDate.value;
+    }
+    return params;
+};
+
+const loadItems = async ({ page, itemsPerPage } = {}) => {
     loading.value = true;
+    // Default pagination if called without arguments
+    const p = page || 1;
+    const s = itemsPerPage || 10;
+
     try {
-        const response = await api.get('orders/', { 
-            params: { 
-                page, 
-                page_size: itemsPerPage, 
-                search: search.value,
-                period: selectedPeriod.value // Send filter to backend
-            } 
-        });
+        const params = { 
+            page: p, 
+            page_size: s, 
+            ...getQueryParams()
+        };
+
+        const response = await api.get('orders/', { params });
         serverItems.value = response.data.results;
         totalItems.value = response.data.count;
     } catch (error) {
@@ -145,9 +188,8 @@ const loadItems = async ({ page, itemsPerPage }) => {
 
 const loadStats = async () => {
     try {
-        const response = await api.get('orders/report_stats/', {
-            params: { period: selectedPeriod.value }
-        });
+        const params = getQueryParams();
+        const response = await api.get('orders/report_stats/', { params });
         stats.value = response.data;
     } catch (error) {
         console.error("Error loading stats", error);
@@ -173,16 +215,6 @@ const getSuccessRate = (item) => {
     const total = getTotalCount(item);
     if (total === 0) return 0;
     return (getCompletedCount(item) / total) * 100;
-};
-
-const getBotColor = (status) => {
-  switch (status) {
-    case 'completed': return 'success';
-    case 'running': return 'info';
-    case 'failed': return 'error';
-    case 'cancelled': return 'warning';
-    default: return 'grey';
-  }
 };
 
 onMounted(() => {

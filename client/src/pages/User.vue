@@ -10,7 +10,19 @@
         <v-icon icon="mdi-account-group" class="me-2"></v-icon>
         User Management
         <v-spacer></v-spacer>
-        <v-text-field v-model="search" prepend-inner-icon="mdi-magnify" density="compact" label="Search username or email" single-line flat hide-details variant="solo-filled" style="max-width: 300px;" class="me-2"></v-text-field>
+        <v-text-field 
+          v-model="search" 
+          prepend-inner-icon="mdi-magnify" 
+          density="compact" 
+          label="Search username or email" 
+          single-line 
+          flat 
+          hide-details 
+          variant="solo-filled" 
+          style="max-width: 300px;" 
+          class="me-2"
+          @update:model-value="loadItems({ page: 1, itemsPerPage })"
+        ></v-text-field>
         <v-btn color="primary" prepend-icon="mdi-plus" @click="openCreate">New User</v-btn>
       </v-card-title>
       <v-divider></v-divider>
@@ -62,9 +74,9 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue';
+import { ref, nextTick, onMounted, onUnmounted } from 'vue';
 import UserForm from '@/form/UserForm.vue';
-import api from '@/api';
+import api, { socket } from '@/api'; // Import socket
 
 const dialogForm = ref(false);
 const selectedUserId = ref(null);
@@ -80,22 +92,39 @@ const accessDenied = ref(false);
 const snackbar = ref({ show: false, text: '', color: 'success' });
 const showToast = (message, color = 'success') => { snackbar.value = { show: true, text: message, color: color }; };
 
+// Updated headers with sortable property explicit
 const headers = [
-  { title: 'ID', key: 'id', align: 'start' },
-  { title: 'Username', key: 'username' },
-  { title: 'Email', key: 'email' },
-  { title: 'Role', key: 'role' },
-  { title: 'Status', key: 'status' }, 
-  { title: 'Joined', key: 'created_at' },
+  { title: 'ID', key: 'id', align: 'start', sortable: true },
+  { title: 'Username', key: 'username', sortable: true },
+  { title: 'Email', key: 'email', sortable: true },
+  { title: 'Role', key: 'role', sortable: true },
+  { title: 'Status', key: 'status', sortable: false }, 
+  { title: 'Joined', key: 'created_at', sortable: true },
   { title: 'Actions', key: 'actions', sortable: false },
 ];
 
-const loadItems = async ({ page, itemsPerPage } = {}) => {
+// Updated loadItems to handle sorting
+const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
+  const p = page || 1;
+  const s = itemsPerPage || 10;
+  
+  // Transform Vuetify sortBy to Django ordering format
+  let ordering = '';
+  if (sortBy && sortBy.length > 0) {
+      const { key, order } = sortBy[0];
+      ordering = order === 'desc' ? `-${key}` : key;
+  }
+
   loading.value = true;
   accessDenied.value = false;
   try {
     const response = await api.get('users/', {
-      params: { page, page_size: itemsPerPage, search: search.value },
+      params: { 
+        page: p, 
+        page_size: s, 
+        search: search.value,
+        ordering: ordering // Send to backend
+      },
     });
     serverItems.value = response.data.results;
     totalItems.value = response.data.count;
@@ -115,7 +144,11 @@ const loadItems = async ({ page, itemsPerPage } = {}) => {
 const openCreate = () => { selectedUserId.value = null; dialogForm.value = true; };
 const openEdit = (item) => { selectedUserId.value = item.id; dialogForm.value = true; };
 const closeForm = () => { dialogForm.value = false; selectedUserId.value = null; };
-const onUserSaved = () => { closeForm(); loadItems({ page: 1, itemsPerPage: itemsPerPage.value }); showToast('User saved successfully!', 'success'); };
+const onUserSaved = () => { 
+    closeForm(); 
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value }); 
+    showToast('User saved successfully!', 'success'); 
+};
 
 const toggleStatus = async (item) => {
   item.loading = true;
@@ -153,4 +186,22 @@ const getRoleColor = (role) => {
     default: return 'primary';
   }
 };
+
+// --- SOCKET.IO INTEGRATION ---
+onMounted(() => {
+  // Ensure socket is connected
+  if (!socket.connected) {
+    socket.connect();
+  }
+
+  // Listen for real-time updates for users
+  socket.on('user_update', (data) => {
+    // console.log("User Update:", data);
+    loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
+  });
+});
+
+onUnmounted(() => {
+  socket.off('user_update');
+});
 </script>
