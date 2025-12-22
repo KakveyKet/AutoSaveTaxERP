@@ -320,7 +320,6 @@ class ForwarderViewSet(viewsets.ModelViewSet):
 #             'success_rate': round((total_downloaded / total_invoices * 100) if total_invoices > 0 else 0, 1)
 #         })
 
-
 class OrderImportViewSet(viewsets.ModelViewSet):
     serializer_class = OrderImportSerializer
     permission_classes = [IsAuthenticated]
@@ -361,51 +360,56 @@ class OrderImportViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
-        # Save initial record
+        # Save initial record (File uploads to Cloudinary automatically via settings.STORAGES)
         instance = serializer.save(uploaded_by=self.request.user)
         
-        # Notify clients that a new file is processing
         async_to_sync(sio.emit)('order_update', {'action': 'create', 'id': instance.id, 'status': 'processing'})
 
-        # Run processing in background thread
         t = threading.Thread(target=self.process_file, args=(instance,))
         t.start()
 
     def perform_destroy(self, instance):
+        # Delete file from Cloudinary
         if instance.file: instance.file.delete(save=False)
         if instance.generated_zip: instance.generated_zip.delete(save=False)
-        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp', str(instance.id))
+        
+        # Cleanup any stuck local temp folders
+        temp_dir = os.path.join(settings.BASE_DIR, 'temp_downloads', str(instance.id))
         if os.path.exists(temp_dir):
             try: shutil.rmtree(temp_dir)
-            except Exception as e: print(f"Error deleting temp: {e}")
+            except: pass
         
         instance.delete()
-        # Notify clients
         async_to_sync(sio.emit)('order_update', {'action': 'delete', 'id': instance.id})
 
     def process_file(self, instance):
         try:
-            file_path = instance.file.path
-            df_preview = pd.read_excel(file_path, header=None, nrows=20)
-            header_row_index = -1
-            for i, row in df_preview.iterrows():
-                row_str = row.astype(str).str.cat(sep=' ')
-                if "INVOICE NUMBER" in row_str:
-                    header_row_index = i
-                    break
-            if header_row_index == -1:
-                instance.parsed_data = {"error": "Could not find 'INVOICE NUMBER' header."}
-                instance.save()
-                # Notify Error
-                async_to_sync(sio.emit)('order_update', {'action': 'error', 'id': instance.id, 'message': 'Header not found'})
-                return
-            
-            df = pd.read_excel(file_path, header=header_row_index)
+            # --- UPDATE: Read file directly from stream (Works with Cloudinary) ---
+            # instance.file is a FieldFile, opening it gets the content regardless of storage backend
+            with instance.file.open('rb') as f:
+                # Read preview
+                df_preview = pd.read_excel(f, header=None, nrows=20)
+                
+                header_row_index = -1
+                for i, row in df_preview.iterrows():
+                    row_str = row.astype(str).str.cat(sep=' ')
+                    if "INVOICE NUMBER" in row_str:
+                        header_row_index = i
+                        break
+                
+                if header_row_index == -1:
+                    instance.parsed_data = {"error": "Could not find 'INVOICE NUMBER' header."}
+                    instance.save()
+                    async_to_sync(sio.emit)('order_update', {'action': 'error', 'id': instance.id, 'message': 'Header not found'})
+                    return
+                
+                # Reset pointer to read full file
+                f.seek(0)
+                df = pd.read_excel(f, header=header_row_index)
+
             valid_rows = df[df['INVOICE NUMBER'].notna()]
             extracted_data = []
             
-            # --- REAL-TIME INSERTION LOOP ---
-            total_rows = len(valid_rows)
             for index, (_, row) in enumerate(valid_rows.iterrows()):
                 def clean(val):
                     if pd.isna(val): return ""
@@ -425,22 +429,22 @@ class OrderImportViewSet(viewsets.ModelViewSet):
                     "amount": row.get('AMOUNT INV (USD)', 0) if pd.notna(row.get('AMOUNT INV (USD)')) else 0,
                     "eta": clean(row.get('ETA')),
                     "via": clean(row.get('VIA')),
-                    "status": "pending" # Initial status
+                    "status": "pending"
                 }
                 extracted_data.append(item)
                 
-                # Save every 5 rows to be efficient but still "real-time"
                 if index % 5 == 0:
                     instance.parsed_data = extracted_data
                     instance.save()
-                    # Emit progress update (optional, might be too noisy if list is huge)
-                    # async_to_sync(sio.emit)('order_progress', {'id': instance.id, 'processed': index, 'total': total_rows})
             
-            # Final save
             instance.parsed_data = extracted_data
             instance.save()
             
-            # Notify Completion
+            # --- OPTIONAL: We DO NOT delete the input file here ---
+            # With Cloudinary, it's better to keep the record of what was uploaded.
+            # If you really want to delete it from Cloudinary to save space:
+            # instance.file.delete(save=True) 
+
             async_to_sync(sio.emit)('order_update', {'action': 'processed', 'id': instance.id})
 
         except Exception as e:
@@ -453,10 +457,7 @@ class OrderImportViewSet(viewsets.ModelViewSet):
         order = self.get_object()
         order.bot_status = 'running'
         order.save()
-        
-        # Notify Start
         async_to_sync(sio.emit)('bot_update', {'type': 'status_change', 'order_id': order.id, 'status': 'running', 'message': 'Bot starting...'})
-
         config = request.data
         bot = AutoDownloadBot(order, config)
         bot.run()
@@ -475,17 +476,19 @@ class OrderImportViewSet(viewsets.ModelViewSet):
         if not order.generated_zip:
             return Response({'error': 'No zip file available.'}, status=404)
         try:
-            with zipfile.ZipFile(order.generated_zip.path, 'r') as zip_ref:
-                matching_files = [f for f in zip_ref.namelist() if f.startswith(invoice_number)]
-                if not matching_files:
-                    return Response({'error': 'File not found.'}, status=404)
-                filename = matching_files[0]
-                file_content = zip_ref.read(filename)
-                content_type, _ = mimetypes.guess_type(filename)
-                if not content_type: content_type = 'application/octet-stream'
-                response = HttpResponse(file_content, content_type=content_type)
-                response['Content-Disposition'] = f'inline; filename="{filename}"'
-                return response
+            # Open the zip from Cloudinary/S3/Local
+            with order.generated_zip.open('rb') as zip_file:
+                 with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                    matching_files = [f for f in zip_ref.namelist() if f.startswith(invoice_number)]
+                    if not matching_files:
+                        return Response({'error': 'File not found.'}, status=404)
+                    filename = matching_files[0]
+                    file_content = zip_ref.read(filename)
+                    content_type, _ = mimetypes.guess_type(filename)
+                    if not content_type: content_type = 'application/octet-stream'
+                    response = HttpResponse(file_content, content_type=content_type)
+                    response['Content-Disposition'] = f'inline; filename="{filename}"'
+                    return response
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
@@ -495,7 +498,6 @@ class OrderImportViewSet(viewsets.ModelViewSet):
         total_files = 0
         total_invoices = 0
         total_downloaded = 0
-        
         for order in queryset:
             total_files += 1
             if order.parsed_data and isinstance(order.parsed_data, list):
@@ -509,7 +511,6 @@ class OrderImportViewSet(viewsets.ModelViewSet):
             'total_downloaded': total_downloaded,
             'success_rate': round((total_downloaded / total_invoices * 100) if total_invoices > 0 else 0, 1)
         })
-
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

@@ -15,16 +15,16 @@
         <v-list-item prepend-icon="mdi-view-dashboard" title="Dashboard" to="/dashboard"></v-list-item>
 
         <!-- Only Admins can see these management items -->
-        <div v-if="userData.role === 'admin'">
+       <!-- Management Section: Visible to Admin OR User -->
+        <div v-if="['admin', 'user'].includes(userData.role)">
           <v-list-subheader class="text-uppercase font-weight-bold ml-2 text-caption">Management</v-list-subheader>
 
+          <!-- Visible to both Admin and User -->
           <v-list-item prepend-icon="mdi-truck" title="Forwarders" to="/forwarders"></v-list-item>
-
           <v-list-item prepend-icon="mdi-map-marker" title="Destinations" to="/destinations"></v-list-item>
 
-          <!-- HIDE USERS IF NOT ADMIN -->
-          <v-list-item prepend-icon="mdi-account-group" title="Users" to="/users"></v-list-item>
-          <!-- <v-list-item prepend-icon="mdi-cog" title="Bot Settings" to="/settings"></v-list-item> -->
+          <!-- STRICTLY ADMIN ONLY -->
+          <v-list-item v-if="userData.role === 'admin'" prepend-icon="mdi-account-group" title="Users" to="/users"></v-list-item>
         </div>
         
         <v-divider class="my-2"></v-divider>

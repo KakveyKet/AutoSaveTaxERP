@@ -26,6 +26,7 @@ declare module 'vue-router/auto-routes' {
     '/ImportList': RouteRecordInfo<'/ImportList', '/ImportList', Record<never, never>, Record<never, never>>,
     '/InvoiceReport': RouteRecordInfo<'/InvoiceReport', '/InvoiceReport', Record<never, never>, Record<never, never>>,
     '/Login': RouteRecordInfo<'/Login', '/Login', Record<never, never>, Record<never, never>>,
+    '/NotFound': RouteRecordInfo<'/NotFound', '/NotFound', Record<never, never>, Record<never, never>>,
     '/Profile': RouteRecordInfo<'/Profile', '/Profile', Record<never, never>, Record<never, never>>,
     '/SecretAdmin': RouteRecordInfo<'/SecretAdmin', '/SecretAdmin', Record<never, never>, Record<never, never>>,
     '/Settings': RouteRecordInfo<'/Settings', '/Settings', Record<never, never>, Record<never, never>>,
@@ -74,6 +75,10 @@ declare module 'vue-router/auto-routes' {
     }
     'src/pages/Login.vue': {
       routes: '/Login'
+      views: never
+    }
+    'src/pages/NotFound.vue': {
+      routes: '/NotFound'
       views: never
     }
     'src/pages/Profile.vue': {

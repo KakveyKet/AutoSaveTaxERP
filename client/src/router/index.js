@@ -13,7 +13,7 @@ import Settings from "@/pages/Settings.vue";
 import InvoiceReport from "@/pages/InvoiceReport.vue";
 import TotalDownloadReport from "@/pages/TotalDownloadReport.vue";
 import SecretAdmin from "@/pages/SecretAdmin.vue";
-
+import NotFound from "@/pages/NotFound.vue";
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -53,13 +53,13 @@ const router = createRouter({
           path: "forwarders",
           name: "forwarders",
           component: Forwarder,
-          meta: { roles: ['admin'] } // Only Admin
+          // meta: { roles: ['admin'] } // Only Admin
         },
         {
           path: "destinations",
           name: "Destination",
           component: Destination,
-          meta: { roles: ['admin'] } // Only Admin
+          // meta: { roles: ['admin'] } // Only Admin
         },
         {
           path: "settings",
@@ -95,6 +95,11 @@ const router = createRouter({
         },
         
       ],
+    },
+    {
+      path: "/:pathMatch(.*)*",
+      name: "NotFound",
+      component: NotFound,
     },
   ],
 });

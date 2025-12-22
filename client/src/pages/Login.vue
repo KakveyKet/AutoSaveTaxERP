@@ -103,7 +103,7 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import axios from 'axios';
+import api from '@/api'; // <--- Use shared API instance
 
 const router = useRouter();
 
@@ -130,19 +130,24 @@ const handleLogin = async () => {
   error.value = '';
 
   try {
-    const response = await axios.post('http://127.0.0.1:8000/api/token/', {
+    // Use 'api' instance. BaseURL is already handled in api.js
+    const response = await api.post('token/', { 
       username: username.value,
       password: password.value
     });
 
-    // Save tokens & Role
+    // Save tokens
     localStorage.setItem('access_token', response.data.access);
     localStorage.setItem('refresh_token', response.data.refresh);
     
-    // If you implemented the role return in Django, save it here too
+    // Save Role (If your backend sends it)
     if (response.data.role) {
         localStorage.setItem('user_role', response.data.role);
     }
+
+    // Force socket reconnect on login (if needed)
+    // import { socket } from '@/api';
+    // socket.connect();
 
     router.push('/');
     
@@ -151,7 +156,7 @@ const handleLogin = async () => {
     if (err.response && err.response.status === 401) {
       error.value = 'Incorrect username or password.';
     } else if (err.code === 'ERR_NETWORK') {
-      error.value = 'Unable to connect to server. Is Django running?';
+      error.value = 'Unable to connect to server. Is Backend running?';
     } else {
       error.value = 'An unexpected error occurred.';
     }
@@ -162,9 +167,7 @@ const handleLogin = async () => {
 </script>
 
 <style scoped>
-/* Optional: Add a subtle gradient background if you prefer */
 .fill-height {
   background: #f5f5f5; 
-  /* background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); */
 }
 </style>

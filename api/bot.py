@@ -13,6 +13,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from django.conf import settings
 from django.core.files import File
+# Added ActionChains import as it is needed for the tab/esc sequence
+from selenium.webdriver.common.action_chains import ActionChains
+from asgiref.sync import async_to_sync
+from server.sio import sio
 
 class AutoDownloadBot:
     def __init__(self, order_import_instance, config=None):
@@ -25,6 +29,9 @@ class AutoDownloadBot:
         self.username = self.config.get('username', "tcexp01@dc.libgroup.com")
         self.password = self.config.get('password', "Tc&Exp0#1385!")
         
+        self.start_index = int(self.config.get('start_index', 0))
+        self.limit = self.config.get('limit') 
+
         # Set to True if you don't want to see the browser window
         self.headless = False 
 
@@ -56,6 +63,13 @@ class AutoDownloadBot:
         }
         self.chrome_options.add_experimental_option("prefs", prefs)
 
+    def _emit(self, event_type, payload):
+        try:
+            message = {'type': event_type, 'order_id': self.order.id, **payload}
+            async_to_sync(sio.emit)('bot_update', message)
+        except Exception as e:
+            print(f"Socket Emit Error: {e}")
+
     def run(self):
         """Starts the bot process in a separate thread so it doesn't block Django."""
         t = threading.Thread(target=self._process_in_background)
@@ -68,6 +82,17 @@ class AutoDownloadBot:
             self.items[index]['status'] = status
             self.order.parsed_data = self.items
             self.order.save()
+            self._emit('progress', {'index': index, 'status': status, 'invoice': self.items[index].get('invoice_number')})
+
+    def _check_stop_signal(self):
+        self.order.refresh_from_db()
+        if self.order.bot_status == 'stopping':
+            self.order.bot_status = 'cancelled'
+            self.order.bot_message = "Stopped by user."
+            self.order.save()
+            self._emit('status_change', {'status': 'cancelled', 'message': 'Stopped by user.'})
+            return True
+        return False
 
     def _rename_latest_download(self, new_name):
         """Waits for a file to appear in the download folder and renames it to match the invoice number."""
@@ -75,6 +100,7 @@ class AutoDownloadBot:
             # Wait loop for file to appear (Fast polling)
             retries = 20 # Wait up to 10 seconds (20 * 0.5s)
             while retries > 0:
+                if self._check_stop_signal(): return
                 files = [os.path.join(self.download_dir, f) for f in os.listdir(self.download_dir) if os.path.isfile(os.path.join(self.download_dir, f))]
                 # Ignore temp files, the archive itself, and partial downloads
                 valid_files = [f for f in files if "archive.zip" not in f and not f.endswith('.crdownload') and not f.endswith('.tmp')]
@@ -128,6 +154,7 @@ class AutoDownloadBot:
             self.order.bot_status = 'running'
             self.order.bot_message = "Initializing Browser..."
             self.order.save()
+            self._emit('status_change', {'status': 'running', 'message': 'Initializing Browser...'})
 
             print("Starting Browser...")
             driver_path = ChromeDriverManager().install()
@@ -160,6 +187,10 @@ class AutoDownloadBot:
                 element.send_keys(text)
 
             # --- 1. LOGIN ---
+            if self._check_stop_signal(): 
+                if driver: driver.quit()
+                return
+
             try:
                 print("Logging in...")
                 email_field = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='email' or @name='loginfmt']")))
@@ -168,7 +199,7 @@ class AutoDownloadBot:
                 
                 password_field = wait.until(EC.visibility_of_element_located((By.XPATH, "//input[@type='password' or @name='passwd']")))
                 password_field.send_keys(self.password)
-                time.sleep(0.5)
+                time.sleep(0.5) 
                 driver.switch_to.active_element.send_keys(Keys.ENTER)
                 
                 try:
@@ -177,14 +208,61 @@ class AutoDownloadBot:
                 except: pass
                 
                 WebDriverWait(driver, 120).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                self._emit('log', {'message': 'Login Successful'})
                 print("Login Successful!")
             except Exception as e:
                 print(f"Login Failed: {e}")
                 raise e
 
+            # --- AUTO CLOSE POPUP (ADDED HERE) ---
+            try:
+                print("Checking for startup popups...")
+                time.sleep(5) 
+
+                # 1. Reset Focus
+                try:
+                    driver.find_element(By.TAG_NAME, "body").click()
+                except: pass
+
+                # 2. Try ESCAPE
+                try:
+                    ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                    print("Sent ESC key.")
+                    time.sleep(1)
+                except: pass
+
+                # 3. Try Clicking Close Buttons (X or text)
+                close_selectors = [
+                    "//button[@title='Close']", 
+                    "//button[@aria-label='Close']",
+                    "//button[span[text()='Close']]",
+                    "//div[@role='button'][@title='Close']",
+                    "//*[@data-icon-name='Cancel']",
+                    "//*[@data-icon-name='ChromeClose']" 
+                ]
+                for xpath in close_selectors:
+                    try:
+                        elements = driver.find_elements(By.XPATH, xpath)
+                        for btn in elements:
+                            if btn.is_displayed():
+                                print(f"Found and clicking: {xpath}")
+                                driver.execute_script("arguments[0].click();", btn)
+                                time.sleep(1)
+                    except: continue
+
+            except Exception as e:
+                print(f"Popup check finished: {e}")
+            # -------------------------------------
+
+            if self._check_stop_signal(): 
+                if driver: driver.quit()
+                return
+
             # --- 2. NAVIGATION ---
             wait_for_loading()
+            time.sleep(2) 
             try:
+                self._emit('log', {'message': 'Navigating...'})
                 fav_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(@title, 'Favorites') or contains(@aria-label, 'Favorites')]")))
                 fav_btn.click()
                 export_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Export Invoice (Bulk)')]")))
@@ -204,147 +282,163 @@ class AutoDownloadBot:
                     if inp.is_displayed() and inp.is_enabled(): return inp
                 raise Exception("No input found")
 
-            for i, item in enumerate(self.items):
+            # Apply limits if configured
+            total_items = len(self.items)
+            end_index = min(self.start_index + (int(self.limit) if self.limit else total_items), total_items)
+            
+            for i in range(self.start_index, end_index):
+                if self._check_stop_signal(): 
+                    if driver: driver.quit()
+                    return 
+
+                item = self.items[i]
                 invoice = item.get('invoice_number')
                 
-                # Check for stop signal from DB
-                self.order.refresh_from_db()
-                if self.order.bot_status == 'stopping':
-                    self.order.bot_status = 'cancelled'
-                    self.order.save()
-                    return
+                # Check if item is already done to avoid reprocessing
+                if item.get('status') == 'completed': continue
 
-                try:
-                    self._update_item_status(i, 'processing')
-                    print(f"[{i+1}] Processing: {invoice}")
-                    wait_for_loading()
-
-                    # --- INTERACTION LOGIC (Simplified) ---
-                    # 1. Open Report
-                    print("Clicking Report Dropdown...")
+                for attempt in range(3): # Retry logic
+                    if self._check_stop_signal(): 
+                        if driver: driver.quit()
+                        return
                     try:
-                        target_report_text = "Report"
-                        report_link = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(text(), '{target_report_text}')]")))
-                        report_link.click()
-                        time.sleep(0.5)
-                        po_form_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Purchase Order Form')]")))
-                        po_form_link.click()
-                    except Exception as nav_err:
-                        print(f"Menu error: {nav_err}")
-                        time.sleep(1)
-                        report_link = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(text(), '{target_report_text}')]")))
-                        report_link.click()
-                        time.sleep(0.5)
-                        po_form_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Purchase Order Form')]")))
-                        po_form_link.click()
+                        self._update_item_status(i, 'processing')
+                        print(f"[{i+1}] Processing: {invoice}")
+                        wait_for_loading()
 
-                    wait_for_loading()
-                    time.sleep(2) 
-
-                    # 2. Fill Invoice
-                    input_field = wait.until(lambda d: find_invoice_input())
-                    fill_input_robust(input_field, invoice)
-                    
-                    # 3. Click Change/Apply
-                    try:
-                        change_btn = driver.find_element(By.XPATH, "//*[text()='Change' or text()='Apply' or text()='OK']")
-                        change_btn.click()
-                    except:
-                        input_field.send_keys(Keys.ENTER)
-
-                    wait_for_loading()
-                    time.sleep(1)
-
-                    # 4. Handle Dialog & Download
-                    try:
-                        name_input = wait.until(EC.visibility_of_element_located((By.XPATH, "//label[contains(text(), 'Name')]/following::input[1]")))
-                        fill_input_robust(name_input, f"{invoice}.xlsx")
-                        
+                        # --- INTERACTION LOGIC (Simplified) ---
+                        # 1. Open Report
+                        print("Clicking Report Dropdown...")
                         try:
-                            dialog_ok_btn = driver.find_element(By.XPATH, "//button[contains(@name, 'OK') or text()='OK']")
-                            dialog_ok_btn.click()
+                            target_report_text = "Report"
+                            report_link = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(text(), '{target_report_text}')]")))
+                            report_link.click()
+                            time.sleep(0.5)
+                            po_form_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Purchase Order Form')]")))
+                            po_form_link.click()
+                        except Exception as nav_err:
+                            print(f"Menu error: {nav_err}")
+                            time.sleep(1)
+                            report_link = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(text(), '{target_report_text}')]")))
+                            report_link.click()
+                            time.sleep(0.5)
+                            po_form_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Purchase Order Form')]")))
+                            po_form_link.click()
+
+                        wait_for_loading()
+                        time.sleep(2) 
+
+                        # 2. Fill Invoice
+                        input_field = wait.until(lambda d: find_invoice_input())
+                        fill_input_robust(input_field, invoice)
+                        
+                        # 3. Click Change/Apply
+                        try:
+                            change_btn = driver.find_element(By.XPATH, "//*[text()='Change' or text()='Apply' or text()='OK']")
+                            change_btn.click()
                         except:
-                            name_input.send_keys(Keys.ENTER)
+                            input_field.send_keys(Keys.ENTER)
 
                         wait_for_loading()
                         time.sleep(1)
-                    except Exception as dialog_err:
-                        print(f"Dialog step error: {dialog_err}")
 
-                    # 5. Final Download Trigger
-                    try:
-                        main_ok_btn = short_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='OK']] | //button[text()='OK']")))
-                        driver.execute_script("arguments[0].click();", main_ok_btn)
-                        
-                        # Capture and Rename File
-                        self._rename_latest_download(invoice)
-                    except Exception as err:
-                        print(f"Download trigger failed: {err}")
-                        try: driver.switch_to.active_element.send_keys(Keys.ENTER)
+                        # 4. Handle Dialog & Download
+                        try:
+                            name_input = wait.until(EC.visibility_of_element_located((By.XPATH, "//label[contains(text(), 'Name')]/following::input[1]")))
+                            fill_input_robust(name_input, f"{invoice}.xlsx")
+                            
+                            try:
+                                dialog_ok_btn = driver.find_element(By.XPATH, "//button[contains(@name, 'OK') or text()='OK']")
+                                dialog_ok_btn.click()
+                            except:
+                                name_input.send_keys(Keys.ENTER)
+
+                            wait_for_loading()
+                            time.sleep(1)
+                        except Exception as dialog_err:
+                            print(f"Dialog step error: {dialog_err}")
+
+                        # 5. Final Download Trigger
+                        try:
+                            main_ok_btn = short_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[span[text()='OK']] | //button[text()='OK']")))
+                            driver.execute_script("arguments[0].click();", main_ok_btn)
+                            
+                            # Capture and Rename File
+                            self._rename_latest_download(invoice)
+                        except Exception as err:
+                            print(f"Download trigger failed: {err}")
+                            try: driver.switch_to.active_element.send_keys(Keys.ENTER)
+                            except: pass
+
+                        wait_for_loading()
+                        time.sleep(2) 
+
+                        # 6. Close Success Popup
+                        try:
+                            driver.switch_to.active_element.send_keys(Keys.ENTER)
                         except: pass
+                        
+                        wait_for_loading()
+                        time.sleep(2) 
 
-                    wait_for_loading()
-                    time.sleep(2) 
-
-                    # 6. Close Success Popup
-                    try:
-                        driver.switch_to.active_element.send_keys(Keys.ENTER)
-                    except: pass
-                    
-                    wait_for_loading()
-                    time.sleep(2) 
-
-                    self._update_item_status(i, 'completed')
-                    processed_count += 1
-                    
-                except Exception as e:
-                    print(f"Failed Invoice {invoice}: {e}")
-                    self._update_item_status(i, 'failed')
+                        self._update_item_status(i, 'completed')
+                        processed_count += 1
+                        break 
+                    except Exception as e:
+                        print(f"Failed Invoice {invoice}: {e}")
+                        if attempt == 2: self._update_item_status(i, 'failed')
+                        else: time.sleep(1)
 
             # --- 4. FINISH & SAVE ---
             print("Zipping files...")
             zip_path = self._zip_files()
             
-            if zip_path and os.path.exists(zip_path):
-                # --- NEW LOGIC: DETERMINE DYNAMIC ZIP NAME ---
-                # Default fallback name
-                target_zip_name = f"Invoices_{self.order.id}.zip"
-                
-                try:
-                    # Attempt to get original filename from model
-                    # Assumes 'file' is the field name on your Order model
-                    if hasattr(self.order, 'file') and self.order.file:
-                        original_name = os.path.basename(self.order.file.name)
-                        base_name = os.path.splitext(original_name)[0]
-                        target_zip_name = f"{base_name}.zip"
-                except Exception as name_error:
-                    print(f"Could not determine original filename: {name_error}")
+            target_zip_name = f"Invoices_{self.order.id}.zip"
+            try:
+                if self.order.file and hasattr(self.order.file, 'name'):
+                    original = os.path.basename(self.order.file.name)
+                    target_zip_name = f"{os.path.splitext(original)[0]}.zip"
+            except: pass
 
-                # A. Save to Django Model (Database)
+            if zip_path and os.path.exists(zip_path):
+                # 1. SAVE TO DIGITALOCEAN DISK
                 with open(zip_path, 'rb') as f:
                     self.order.generated_zip.save(target_zip_name, File(f))
                 
-                # B. COPY TO LOCAL COMPUTER (User's Downloads Folder)
+                cloud_url = self.order.generated_zip.url
+
+                # 2. ATTEMPT LOCAL COPY (Localhost Only)
+                local_success = False
+                if not self.headless: 
+                    try:
+                        local_downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+                        if os.path.exists(local_downloads):
+                            target_path = os.path.join(local_downloads, target_zip_name)
+                            shutil.copy2(zip_path, target_path)
+                            local_success = True
+                    except: pass
+
+                # 3. CLEANUP TEMP
                 try:
-                    # 1. Find User's Downloads Folder (Cross-platform way)
-                    local_downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-                    
-                    # 2. Use the dynamic name
-                    target_path = os.path.join(local_downloads, target_zip_name)
-                    
-                    # 3. Copy the file
-                    shutil.copy2(zip_path, target_path)
-                    
-                    print(f"✅ Copied to local machine: {target_path}")
-                    self.order.bot_message = f"Done! Saved to {target_zip_name}"
-                except Exception as copy_err:
-                    print(f"❌ Local Copy Failed: {copy_err}")
-                    self.order.bot_message = "Saved to DB only (Local copy failed)"
+                    shutil.rmtree(self.download_dir)
+                except: pass
+
+                status_msg = "Completed."
+                if local_success: status_msg += " Copied to Downloads."
+                else: status_msg += " Saved to Server/Cloud."
 
                 self.order.bot_status = 'completed'
+                self.order.bot_message = status_msg
+                
+                self._emit('status_change', {
+                    'status': 'completed', 
+                    'message': status_msg, 
+                    'file_url': cloud_url 
+                })
             else:
                 self.order.bot_status = 'completed'
-                self.order.bot_message = "Finished, but no files found to zip."
+                self.order.bot_message = "Finished, no files found."
+                self._emit('status_change', {'status': 'completed', 'message': "Finished, no files."})
             
             self.order.save()
             
@@ -356,4 +450,5 @@ class AutoDownloadBot:
             self.order.bot_status = 'failed'
             self.order.bot_message = f"Error: {str(e)}"
             self.order.save()
-            if driver: driver.quit()        
+            self._emit('status_change', {'status': 'failed', 'message': f"Error: {str(e)}"})
+            if driver: driver.quit()
