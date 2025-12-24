@@ -80,6 +80,7 @@
     <v-dialog v-model="dialogDelete" max-width="500px">
       <v-card>
         <v-card-title class="text-h5">Are you sure?</v-card-title>
+        <v-card-text>This action cannot be undone.</v-card-text>
         <v-card-actions>
           <v-spacer></v-spacer>
           <v-btn variant="text" @click="dialogDelete = false">Cancel</v-btn>
@@ -105,11 +106,11 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
-import api, { socket } from '@/api'; // Import socket
+import api, { socket } from '@/api'; 
 import DestinationForm from '@/form/DestinationForm.vue';
 
 // State
-const dialogForm = ref(false); // Controls form popup
+const dialogForm = ref(false); 
 const selectedId = ref(null);
 const search = ref('');
 const serverItems = ref([]);
@@ -166,13 +167,18 @@ const closeForm = () => {
 
 // 4. Handle Save Success
 const onSaved = () => { 
+  // Determine if it was an edit or create based on selectedId BEFORE closing the form
+  const message = selectedId.value 
+    ? 'Destination updated successfully.' 
+    : 'Destination created successfully.';
+
   closeForm(); 
   // We reload here for immediate feedback, but socket will also trigger reload
   loadItems({ page: 1, itemsPerPage: itemsPerPage.value }); 
-  showToast('Destination saved successfully!', 'success');
+  showToast(message, 'success');
 };
 
-// API Actions (Updated for Sorting)
+// API Actions
 const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
   const p = page || 1;
   const s = itemsPerPage || 10;
@@ -198,7 +204,7 @@ const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
     totalItems.value = response.data.count;
   } catch (error) {
     console.error('Error:', error);
-    showToast('Failed to load destinations', 'error');
+    showToast('Failed to load destinations.', 'error');
   } finally {
     loading.value = false;
   }
@@ -210,16 +216,19 @@ const deleteItem = (item) => {
 };
 
 const deleteItemConfirm = async () => {
+  if (!deletedItem.value) return;
+
   try {
     await api.delete(`destinations/${deletedItem.value.id}/`);
     // Local reload, socket will handle others
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
-    showToast('Destination deleted successfully!', 'success');
+    showToast('Destination deleted successfully.', 'success');
   } catch (e) { 
     console.error(e); 
-    showToast('Failed to delete destination', 'error');
+    showToast('Failed to delete destination. Please try again.', 'error');
   } finally {
     dialogDelete.value = false;
+    deletedItem.value = null;
   }
 };
 

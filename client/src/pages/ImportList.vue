@@ -508,9 +508,7 @@ onMounted(() => {
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
     // If viewing details of the active order, update them live too!
     if (selectedImport.value && selectedImport.value.id === data.order_id) {
-         // Reload details isn't trivial since we need to fetch fresh data for just that item
-         // A simple workaround is reload the list, then find the item in the new list and update selectedImport
-         // Or just let the user close/reopen.
+    
     }
   });
 });
@@ -519,4 +517,4 @@ onUnmounted(() => {
   socket.off('order_update');
   socket.off('bot_update');
 });
-</script>
+</script> 

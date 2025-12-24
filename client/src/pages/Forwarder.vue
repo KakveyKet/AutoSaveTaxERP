@@ -80,6 +80,7 @@
     <v-dialog v-model="dialogDelete" max-width="500px">
       <v-card>
         <v-card-title class="text-h5">Are you sure?</v-card-title>
+        <v-card-text>This action cannot be undone.</v-card-text>
         <v-card-actions>
           <v-spacer></v-spacer>
           <v-btn variant="text" @click="dialogDelete = false">Cancel</v-btn>
@@ -106,7 +107,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import ForwarderForm from '@/form/ForwarderForm.vue'; 
-import api, { socket } from '@/api'; // Import socket
+import api, { socket } from '@/api'; 
 
 // --- State ---
 const dialogForm = ref(false); 
@@ -138,10 +139,16 @@ const openCreate = () => { selectedId.value = null; dialogForm.value = true; };
 const openEdit = (item) => { selectedId.value = item.id; dialogForm.value = true; };
 const closeForm = () => { dialogForm.value = false; selectedId.value = null; };
 
+// Handle Save (Create or Update)
 const onSaved = () => {
+  // Determine if it was an edit or create based on selectedId BEFORE closing the form
+  const message = selectedId.value 
+    ? 'Forwarder updated successfully.' 
+    : 'Forwarder created successfully.';
+
   closeForm();
   loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
-  showToast('Forwarder saved successfully!', 'success');
+  showToast(message, 'success');
 };
 
 const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
@@ -163,7 +170,7 @@ const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
     totalItems.value = response.data.count;
   } catch (error) {
     console.error('Error fetching forwarders:', error);
-    showToast('Failed to load data', 'error');
+    showToast('Failed to load data.', 'error');
   } finally {
     loading.value = false;
   }
@@ -172,15 +179,18 @@ const loadItems = async ({ page, itemsPerPage, sortBy } = {}) => {
 const deleteItem = (item) => { deletedItem.value = item; dialogDelete.value = true; };
 
 const deleteItemConfirm = async () => {
+  if (!deletedItem.value) return;
+
   try {
     await api.delete(`forwarders/${deletedItem.value.id}/`);
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
-    showToast('Forwarder deleted successfully!', 'success');
+    showToast('Forwarder deleted successfully.', 'success');
   } catch (error) {
     console.error('Error deleting forwarder:', error);
-    showToast('Failed to delete item', 'error');
+    showToast('Failed to delete item. Please try again.', 'error');
   } finally {
     dialogDelete.value = false;
+    deletedItem.value = null;
   }
 };
 
@@ -189,7 +199,8 @@ onMounted(() => {
   if (!socket.connected) socket.connect();
 
   socket.on('forwarder_update', (data) => {
-    // console.log("Real-time Update:", data);
+    // Optional: You could show a small toast here like "List updated remotely"
+    // but usually, silent updates are preferred for lists.
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value });
   });
 });

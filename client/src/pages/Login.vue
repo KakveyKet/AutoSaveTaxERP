@@ -48,11 +48,11 @@
               ></v-text-field>
 
               <!-- Forgot Password Link -->
-              <div class="d-flex justify-end mb-6">
+              <!-- <div class="d-flex justify-end mb-6">
                 <a href="#" class="text-caption text-decoration-none text-primary font-weight-medium">
                   Forgot password?
                 </a>
-              </div>
+              </div> -->
 
               <!-- Error Alert -->
               <v-expand-transition>

@@ -25,8 +25,7 @@
 
             <v-divider class="my-6"></v-divider>
 
-
-            <!-- 3. Actions -->
+            <!-- 2. Actions -->
             <h3 class="text-h6 mb-4">2. Execute</h3>
 
             <div class="d-flex flex-column gap-3">
@@ -41,8 +40,6 @@
                 class="mb-3">
                 STOP BOT
               </v-btn>
-
-         
             </div>
 
             <!-- Status Output -->
@@ -59,16 +56,14 @@
         </v-card>
       </v-col>
     </v-row>
-
-    <v-snackbar v-model="snackbar.show" :color="snackbar.color" timeout="3000">
-      {{ snackbar.text }}
-    </v-snackbar>
+    <!-- Local v-snackbar removed; using Global Toast via App.vue -->
   </v-container>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import api from '@/api';
+import { toast } from '@/store/useToast'; // Import Global Toast
 
 // State
 const orderImports = ref([]);
@@ -77,7 +72,6 @@ const loadingOrders = ref(false);
 const isRunning = ref(false);
 const statusMessage = ref('');
 const statusType = ref('info');
-const snackbar = ref({ show: false, text: '', color: 'success' });
 let statusInterval = null;
 
 // Default settings
@@ -130,7 +124,7 @@ const loadOrderImports = async () => {
     }
   } catch (error) {
     console.error('Error loading orders:', error);
-    showToast('Failed to load import files', 'error');
+    toast.error('Failed to load import files', 'Error');
   } finally {
     loadingOrders.value = false;
   }
@@ -152,7 +146,9 @@ const runBot = async (mode) => {
 
     statusMessage.value = response.data.message || 'Bot started successfully.';
     statusType.value = 'success';
-    showToast('Bot process started', 'success');
+    
+    // Trigger global toast
+    toast.success('Bot process started', 'Success');
 
     pollStatus(selectedOrder.value.id);
 
@@ -160,12 +156,13 @@ const runBot = async (mode) => {
     console.error('Bot start error:', error);
     statusMessage.value = error.response?.data?.message || 'Failed to start bot.';
     statusType.value = 'error';
-    showToast('Error starting bot', 'error');
+    
+    // Trigger global toast
+    toast.error('Error starting bot', 'Error');
     isRunning.value = false;
   }
 };
 
-// --- NEW STOP BOT FUNCTION ---
 const stopBot = async () => {
   if (!selectedOrder.value) return;
 
@@ -173,11 +170,13 @@ const stopBot = async () => {
     await api.post(`orders/${selectedOrder.value.id}/stop_bot/`);
     statusMessage.value = "Stop signal sent. Bot stopping...";
     statusType.value = 'warning';
-    showToast('Stop signal sent', 'warning');
-    // We keep polling; eventually status becomes 'cancelled' or 'failed'
+    
+    // Trigger global toast
+    toast.warning('Stop signal sent', 'Warning');
+    
   } catch (error) {
     console.error('Stop error:', error);
-    showToast('Failed to stop bot', 'error');
+    toast.error('Failed to stop bot', 'Error');
   }
 };
 
@@ -211,13 +210,8 @@ const pollStatus = (orderId) => {
   }, 2000);
 };
   
-// Helpers
 const formatDate = (dateStr) => {
   if (!dateStr) return '';
   return new Date(dateStr).toLocaleString();
-};
-
-const showToast = (text, color = 'success') => {
-  snackbar.value = { show: true, text, color };
 };
 </script>
