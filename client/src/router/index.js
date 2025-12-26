@@ -14,7 +14,7 @@ import InvoiceReport from "@/pages/InvoiceReport.vue";
 import TotalDownloadReport from "@/pages/TotalDownloadReport.vue";
 import SecretAdmin from "@/pages/SecretAdmin.vue";
 import NotFound from "@/pages/NotFound.vue";
-
+import UploadFile from "@/pages/UploadFile.vue";
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -35,7 +35,7 @@ const router = createRouter({
       name: "main_layout",
       redirect: "/dashboard",
       component: MainLayout,
-      meta: { requiresAuth: true }, // Protects all children by default
+      meta: { requiresAuth: true }, 
       children: [
         {
           path: "dashboard",
@@ -92,6 +92,11 @@ const router = createRouter({
             path: "invoice-report",
             name: "InvoiceReport",
             component: InvoiceReport,
+        },
+        {
+          path: "upload-file",
+          name: "UploadFile",
+          component: UploadFile,
         },
         
       ],

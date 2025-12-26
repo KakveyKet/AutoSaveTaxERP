@@ -15,8 +15,16 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
+AWS_ACCESS_KEY_ID = 'DO00ZVEBB8UJC2LLV9D3'         # e.g. DO00LZ...
+AWS_SECRET_ACCESS_KEY = 'YNBvdueaczQurEZbE+AHiJjx19wTG2trkxF/xbuQUjE'     # e.g. 8kMx2...
 # Quick-start development settings - unsuitable for production
+AWS_STORAGE_BUCKET_NAME = 'auto-save-tax-erp'      # The unique name you chose
+AWS_S3_REGION_NAME = 'sgp1'      
+AWS_S3_ENDPOINT_URL = f'https://{AWS_S3_REGION_NAME}.digitaloceanspaces.com'
+AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_DEFAULT_ACL = 'public-read' # Files are public (good for download links)
+
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
@@ -41,7 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
-    # 'django_extensions',
+    'django_extensions',
     'api',
 ]
 REST_FRAMEWORK = {
@@ -141,3 +149,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ALLOW_ALL_ORIGINS = True
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}

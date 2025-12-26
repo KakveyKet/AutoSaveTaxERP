@@ -13,7 +13,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from django.conf import settings
 from django.core.files import File
-# Added ActionChains import as it is needed for the tab/esc sequence
 from selenium.webdriver.common.action_chains import ActionChains
 from asgiref.sync import async_to_sync
 from server.sio import sio
@@ -29,6 +28,11 @@ class AutoDownloadBot:
         self.username = self.config.get('username', "tcexp01@dc.libgroup.com")
         self.password = self.config.get('password', "Tc&Exp0#1385!")
         
+        # Target 1: Custom local path
+        self.local_target_path = self.config.get('local_target_path', '')
+        # Target 2: Download folder path
+        self.local_download_path = self.config.get('local_download_path', '')
+
         self.start_index = int(self.config.get('start_index', 0))
         self.limit = self.config.get('limit') 
 
@@ -401,31 +405,50 @@ class AutoDownloadBot:
             except: pass
 
             if zip_path and os.path.exists(zip_path):
-                # 1. SAVE TO DIGITALOCEAN DISK
+                # Target 0: SERVER (Cloud/Media) - Always backup
                 with open(zip_path, 'rb') as f:
                     self.order.generated_zip.save(target_zip_name, File(f))
                 
                 cloud_url = self.order.generated_zip.url
+                status_messages = ["Saved to Server"]
 
-                # 2. ATTEMPT LOCAL COPY (Localhost Only)
-                local_success = False
-                if not self.headless: 
+                # Target 1: CUSTOM LOCAL PATH
+                if self.local_target_path:
                     try:
-                        local_downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-                        if os.path.exists(local_downloads):
-                            target_path = os.path.join(local_downloads, target_zip_name)
-                            shutil.copy2(zip_path, target_path)
-                            local_success = True
-                    except: pass
+                        target_dir = os.path.normpath(self.local_target_path)
+                        if os.path.exists(target_dir) and os.path.isdir(target_dir):
+                            final_dest = os.path.join(target_dir, target_zip_name)
+                            shutil.copy2(zip_path, final_dest)
+                            status_messages.append(f"Saved to {self.local_target_path}")
+                        else:
+                            print(f"Directory not found: {self.local_target_path}")
+                            status_messages.append("Failed: Target 1 not found")
+                    except Exception as e:
+                        print(f"Error saving to {self.local_target_path}: {e}")
+                        status_messages.append("Failed: Target 1 error")
+
+                # Target 2: DOWNLOAD PATH
+                if self.local_download_path:
+                    try:
+                        download_dir = os.path.normpath(self.local_download_path)
+                        if os.path.exists(download_dir) and os.path.isdir(download_dir):
+                            final_dl_dest = os.path.join(download_dir, target_zip_name)
+                            shutil.copy2(zip_path, final_dl_dest)
+                            status_messages.append(f"Saved to Downloads")
+                        else:
+                            print(f"Download directory not found: {self.local_download_path}")
+                            status_messages.append("Failed: Downloads folder not found")
+                    except Exception as e:
+                        print(f"Error saving to {self.local_download_path}: {e}")
+                        status_messages.append("Failed: Downloads folder error")
 
                 # 3. CLEANUP TEMP
                 try:
                     shutil.rmtree(self.download_dir)
                 except: pass
 
-                status_msg = "Completed."
-                if local_success: status_msg += " Copied to Downloads."
-                else: status_msg += " Saved to Server/Cloud."
+                # Combine messages
+                status_msg = " | ".join(status_messages)
 
                 self.order.bot_status = 'completed'
                 self.order.bot_message = status_msg

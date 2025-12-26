@@ -5,13 +5,7 @@
         <v-toolbar-title>Invoice Download Report</v-toolbar-title>
         <v-spacer></v-spacer>
         
-        <!-- Connection Status Chip -->
-        <v-chip
-          size="x-small"
-          :color="socketConnected ? 'success' : 'error'"
-          class="mr-4"
-          variant="flat"
-        >
+        <v-chip size="x-small" :color="socketConnected ? 'success' : 'error'" class="mr-4" variant="flat">
           <v-icon start size="12">{{ socketConnected ? 'mdi-wifi' : 'mdi-wifi-off' }}</v-icon>
           {{ socketConnected ? 'Live Connection' : 'Disconnected' }}
         </v-chip>
@@ -35,23 +29,13 @@
               @update:model-value="loadReportData"
             >
               <template v-slot:item="{ props, item }">
-                <v-list-item 
-                  v-bind="props" 
-                  :subtitle="new Date(item.raw.uploaded_at).toLocaleString()"
-                ></v-list-item>
+                <v-list-item v-bind="props" :subtitle="new Date(item.raw.uploaded_at).toLocaleString()"></v-list-item>
               </template>
             </v-autocomplete>
           </v-col>
           
           <v-col cols="12" md="6" class="d-flex justify-end">
-            <v-btn 
-              color="info" 
-              variant="tonal" 
-              prepend-icon="mdi-refresh" 
-              @click="loadReportData"
-              :disabled="!selectedFile || loading"
-              :loading="loading"
-            >
+            <v-btn color="info" variant="tonal" prepend-icon="mdi-refresh" @click="loadReportData" :disabled="!selectedFile || loading" :loading="loading">
               Refresh Report
             </v-btn>
           </v-col>
@@ -62,7 +46,6 @@
     <!-- Report Content -->
     <v-expand-transition>
       <div v-if="selectedFile && reportData">
-        
         <!-- Summary Cards -->
         <v-row class="mb-2">
           <v-col cols="12" sm="4">
@@ -94,56 +77,21 @@
         <!-- Detailed Table -->
         <v-card title="Invoice Details" class="mt-4">
           <template v-slot:append>
-            <v-text-field
-              v-model="search"
-              density="compact"
-              label="Search Invoice"
-              prepend-inner-icon="mdi-magnify"
-              single-line
-              hide-details
-              style="width: 250px"
-              variant="outlined"
-            ></v-text-field>
+            <v-text-field v-model="search" density="compact" label="Search Invoice" prepend-inner-icon="mdi-magnify" single-line hide-details style="width: 250px" variant="outlined"></v-text-field>
           </template>
 
-          <v-data-table
-            :headers="headers"
-            :items="reportData"
-            :search="search"
-            density="compact"
-            class="elevation-0"
-            :loading="loading"
-          >
-            <!-- Status Column -->
+          <v-data-table :headers="headers" :items="reportData" :search="search" density="compact" class="elevation-0" :loading="loading">
             <template v-slot:item.status="{ item }">
-              <v-chip
-                :color="getStatusColor(item.status)"
-                size="small"
-                class="text-uppercase font-weight-bold"
-                label
-              >
-                <v-icon start size="small" :class="item.status === 'processing' ? 'mdi-spin' : ''">
-                  {{ getStatusIcon(item.status) }}
-                </v-icon>
+              <v-chip :color="getStatusColor(item.status)" size="small" class="text-uppercase font-weight-bold" label>
+                <v-icon start size="small" :class="item.status === 'processing' ? 'mdi-spin' : ''">{{ getStatusIcon(item.status) }}</v-icon>
                 {{ item.status || 'Pending' }}
               </v-chip>
             </template>
-
-            <!-- Amount Column -->
             <template v-slot:item.amount="{ item }">
               ${{ Number(item.amount).toLocaleString(undefined, { minimumFractionDigits: 2 }) }}
             </template>
-
-            <!-- Actions Column -->
             <template v-slot:item.actions="{ item }">
-              <v-btn
-                icon="mdi-file-eye-outline"
-                variant="text"
-                color="primary"
-                size="small"
-                :disabled="item.status !== 'completed'"
-                @click="previewInvoice(item)"
-              >
+              <v-btn icon="mdi-file-eye-outline" variant="text" color="primary" size="small" :disabled="item.status !== 'completed'" @click="previewInvoice(item)">
                 <v-tooltip activator="parent" location="top">Preview Invoice</v-tooltip>
               </v-btn>
             </template>
@@ -156,14 +104,7 @@
       Please select a file from the dropdown to monitor download progress.
     </v-alert>
 
-    <!-- 1. Row Level Notification (Snackbar) -->
-    <v-snackbar
-      v-model="notification.show"
-      :color="notification.color"
-      :timeout="4000"
-      location="top right"
-      elevation="10"
-    >
+    <v-snackbar v-model="notification.show" :color="notification.color" :timeout="4000" location="top right" elevation="10">
       <div class="d-flex align-center">
         <v-icon start size="28">{{ notification.icon }}</v-icon>
         <div class="ml-2">
@@ -175,7 +116,6 @@
         <v-btn icon="mdi-close" variant="text" @click="notification.show = false"></v-btn>
       </template>
     </v-snackbar>
-
   </v-container>
 </template>
 
@@ -190,13 +130,8 @@ const search = ref('');
 const loading = ref(false);
 const socketConnected = ref(false);
 
-// Notification state
 const notification = reactive({
-  show: false,
-  title: '',
-  message: '',
-  color: 'success',
-  icon: 'mdi-check-circle'
+  show: false, title: '', message: '', color: 'success', icon: 'mdi-check-circle'
 });
 
 const headers = [
@@ -216,51 +151,36 @@ const stats = computed(() => {
   return { total, completed, failed: total - completed };
 });
 
-/**
- * Socket.IO Implementation
- */
-const setupSocketListeners = () => {
-  if (!socket.connected) {
-    socket.connect();
-  }
+// --- PAGE SPECIFIC SOCKET LOGIC ---
 
-  socketConnected.value = socket.connected;
-
-  socket.on('connect', () => {
-    socketConnected.value = true;
-  });
-
-  socket.on('disconnect', () => {
-    socketConnected.value = false;
-  });
-
-  // Listener for bot events
-  socket.on('bot_update', (data) => {
-    // Check if update is for the active file
-    if (selectedFile.value && data.order_id === selectedFile.value.id) {
-      
-      // 1. Handle Row Progress
-      if (data.type === 'progress') {
-        const itemIndex = data.index;
-        if (reportData.value[itemIndex]) {
-          reportData.value[itemIndex].status = data.status;
-
-          // Show Snackbar for individual rows
-          if (data.status === 'completed') {
-            showNotify("Downloaded", `Invoice ${data.invoice} ready.`, "success", "mdi-check-circle");
-          } else if (data.status === 'failed') {
-            showNotify("Failed", `Invoice ${data.invoice} failed.`, "error", "mdi-alert-circle");
-          }
+// 1. We name this function to handle updates for THIS PAGE ONLY
+const handlePageUpdate = (data) => {
+  if (selectedFile.value && data.order_id === selectedFile.value.id) {
+    // Only update Table rows
+    if (data.type === 'progress') {
+      const itemIndex = data.index;
+      if (reportData.value[itemIndex]) {
+        reportData.value[itemIndex].status = data.status;
+        if (data.status === 'completed') {
+          showNotify("Downloaded", `Invoice ${data.invoice} ready.`, "success", "mdi-check-circle");
+        } else if (data.status === 'failed') {
+          showNotify("Failed", `Invoice ${data.invoice} failed.`, "error", "mdi-alert-circle");
         }
       }
-
-      // 2. Handle Batch Completion
-      if (data.type === 'status_change' && data.status === 'completed') {
-        // Simple JavaScript Alert
-        alert(`Download finished for file: ${selectedFile.value?.file_name}`);
-      }
     }
-  });
+    // WE DO NOT ALERT HERE (App.vue does it)
+  }
+};
+
+const setupSocketListeners = () => {
+  if (!socket.connected) socket.connect();
+  socketConnected.value = socket.connected;
+
+  socket.on('connect', () => { socketConnected.value = true; });
+  socket.on('disconnect', () => { socketConnected.value = false; });
+
+  // 2. Add the page-specific listener
+  socket.on('bot_update', handlePageUpdate);
 };
 
 onMounted(() => {
@@ -271,7 +191,10 @@ onMounted(() => {
 onUnmounted(() => {
   socket.off('connect');
   socket.off('disconnect');
-  socket.off('bot_update');
+  
+  // 3. CRITICAL: Remove ONLY the local listener
+  // If you use socket.off('bot_update') without arguments, it kills the alert in App.vue!
+  socket.off('bot_update', handlePageUpdate);
 });
 
 const fetchFiles = async () => {
@@ -313,24 +236,12 @@ const showNotify = (title, message, color = 'success', icon = 'mdi-check-circle'
 };
 
 const getStatusColor = (status) => {
-  const colors = {
-    'completed': 'success',
-    'processing': 'info',
-    'downloading': 'info',
-    'failed': 'error',
-    'pending': 'grey'
-  };
+  const colors = { 'completed': 'success', 'processing': 'info', 'downloading': 'info', 'failed': 'error', 'pending': 'grey' };
   return colors[status] || 'grey';
 };
 
 const getStatusIcon = (status) => {
-  const icons = {
-    'completed': 'mdi-check-circle',
-    'processing': 'mdi-loading mdi-spin',
-    'downloading': 'mdi-loading mdi-spin',
-    'failed': 'mdi-alert-circle',
-    'pending': 'mdi-clock-outline'
-  };
+  const icons = { 'completed': 'mdi-check-circle', 'processing': 'mdi-loading mdi-spin', 'downloading': 'mdi-loading mdi-spin', 'failed': 'mdi-alert-circle', 'pending': 'mdi-clock-outline' };
   return icons[status] || 'mdi-help-circle-outline';
 };
 </script>

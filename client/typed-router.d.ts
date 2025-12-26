@@ -31,6 +31,7 @@ declare module 'vue-router/auto-routes' {
     '/SecretAdmin': RouteRecordInfo<'/SecretAdmin', '/SecretAdmin', Record<never, never>, Record<never, never>>,
     '/Settings': RouteRecordInfo<'/Settings', '/Settings', Record<never, never>, Record<never, never>>,
     '/TotalDownloadReport': RouteRecordInfo<'/TotalDownloadReport', '/TotalDownloadReport', Record<never, never>, Record<never, never>>,
+    '/UploadFile': RouteRecordInfo<'/UploadFile', '/UploadFile', Record<never, never>, Record<never, never>>,
     '/User': RouteRecordInfo<'/User', '/User', Record<never, never>, Record<never, never>>,
   }
 
@@ -95,6 +96,10 @@ declare module 'vue-router/auto-routes' {
     }
     'src/pages/TotalDownloadReport.vue': {
       routes: '/TotalDownloadReport'
+      views: never
+    }
+    'src/pages/UploadFile.vue': {
+      routes: '/UploadFile'
       views: never
     }
     'src/pages/User.vue': {

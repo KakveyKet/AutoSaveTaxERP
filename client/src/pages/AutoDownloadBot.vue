@@ -10,39 +10,70 @@
           </v-toolbar>
 
           <v-card-text class="pa-6">
-            <!-- 1. Select Order Import -->
             <h3 class="text-h6 mb-2">1. Select Import File</h3>
             <p class="text-caption text-grey mb-4">Choose the uploaded Excel file containing the invoices you want to
               process.</p>
 
-            <v-autocomplete v-model="selectedOrder" :items="orderImports" item-title="file_name" item-value="id"
-              label="Select Order Import" variant="outlined" prepend-inner-icon="mdi-file-excel"
-              :loading="loadingOrders" return-object clearable>
+            <v-autocomplete
+              v-model="selectedOrder"
+              v-bind:items="orderImports"
+              item-title="file_name"
+              item-value="id"
+              label="Select Order Import"
+              variant="outlined"
+              prepend-inner-icon="mdi-file-excel"
+              v-bind:loading="loadingOrders"
+              return-object
+              clearable
+            >
               <template v-slot:item="{ props, item }">
-                <v-list-item v-bind="props" :subtitle="formatDate(item.raw.uploaded_at)"></v-list-item>
+                <v-list-item v-bind="props" v-bind:subtitle="formatDate(item.raw.uploaded_at)"></v-list-item>
               </template>
             </v-autocomplete>
 
             <v-divider class="my-6"></v-divider>
 
-            <!-- 2. Actions -->
-            <h3 class="text-h6 mb-4">2. Execute</h3>
+             <h3 class="text-h6 mb-2">2. Configuration (Save Targets)</h3>
+             <p class="text-caption text-grey mb-4">Files will always be saved to the Server (Cloud). You can add two local paths below.</p>
+             
+             <!-- Target 1 -->
+             <v-text-field
+                v-model="localPath"
+                label="Target 1: Custom Folder"
+                placeholder="e.g., D:\Personal\test"
+                variant="outlined"
+                prepend-inner-icon="mdi-folder"
+                hint="Primary local destination folder on the server."
+                persistent-hint
+                class="mb-4"
+             ></v-text-field>
+
+             <!-- Target 2 -->
+             <v-text-field
+                v-model="localDownloadPath"
+                label="Target 2: Download Folder"
+                placeholder="e.g., C:\Users\Admin\Downloads"
+                variant="outlined"
+                prepend-inner-icon="mdi-download"
+                hint="Secondary local destination (e.g., your Downloads folder)."
+                persistent-hint
+                class="mb-4"
+             ></v-text-field>
+
+            <h3 class="text-h6 mb-4">3. Execute</h3>
 
             <div class="d-flex flex-column gap-3">
-              <!-- LOGIN ONLY BUTTON (Start) -->
               <v-btn v-if="!isRunning" size="large" color="info" variant="outlined" prepend-icon="mdi-login"
                 :disabled="!selectedOrder" @click="runBot('login_only')" class="mb-3">
                 Start Download
               </v-btn>
 
-              <!-- STOP BOT BUTTON (Only visible when running) -->
               <v-btn v-if="isRunning" size="large" color="error" variant="flat" prepend-icon="mdi-stop" @click="stopBot"
                 class="mb-3">
                 STOP BOT
               </v-btn>
             </div>
 
-            <!-- Status Output -->
             <v-expand-transition>
               <div v-if="statusMessage" class="mt-6">
                 <v-alert :type="statusType" border="start" elevation="2" closable>
@@ -56,14 +87,13 @@
         </v-card>
       </v-col>
     </v-row>
-    <!-- Local v-snackbar removed; using Global Toast via App.vue -->
   </v-container>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
 import api from '@/api';
-import { toast } from '@/store/useToast'; // Import Global Toast
+import { toast } from '@/store/useToast';
 
 // State
 const orderImports = ref([]);
@@ -72,6 +102,8 @@ const loadingOrders = ref(false);
 const isRunning = ref(false);
 const statusMessage = ref('');
 const statusType = ref('info');
+const localPath = ref(''); 
+const localDownloadPath = ref(''); // State for Target 2
 let statusInterval = null;
 
 // Default settings
@@ -84,6 +116,31 @@ const settings = ref({
 onMounted(() => {
   loadOrderImports();
   loadSettings();
+  
+  // Load local path 1 from storage
+  const savedPath = localStorage.getItem('bot_local_path');
+  if (savedPath) {
+      localPath.value = savedPath;
+  } else {
+      localPath.value = 'D:\\Personal\\test';
+  }
+
+  // Load local path 2 (Downloads) from storage
+  const savedDownloadPath = localStorage.getItem('bot_local_download_path');
+  if (savedDownloadPath) {
+      localDownloadPath.value = savedDownloadPath;
+  } else {
+      // Default fallback
+      localDownloadPath.value = 'C:\Users\TAC52521301\Downloads';
+  }
+});
+
+// Watch for changes in paths and save to localStorage
+watch(localPath, (newPath) => {
+    localStorage.setItem('bot_local_path', newPath);
+});
+watch(localDownloadPath, (newPath) => {
+    localStorage.setItem('bot_local_download_path', newPath);
 });
 
 onUnmounted(() => {
@@ -140,7 +197,11 @@ const runBot = async (mode) => {
   try {
     const savedSettings = localStorage.getItem('bot_settings');
     const config = savedSettings ? JSON.parse(savedSettings) : {};
+    
+    // Pass the local paths to the server configuration
     config.mode = mode;
+    config.local_target_path = localPath.value;
+    config.local_download_path = localDownloadPath.value; // Pass Target 2
 
     const response = await api.post(`orders/${selectedOrder.value.id}/run_bot/`, config);
 
