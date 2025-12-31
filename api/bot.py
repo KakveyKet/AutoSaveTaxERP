@@ -3,6 +3,7 @@ import os
 import threading
 import zipfile
 import shutil
+import paramiko 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager 
@@ -28,9 +29,18 @@ class AutoDownloadBot:
         self.username = self.config.get('username', "tcexp01@dc.libgroup.com")
         self.password = self.config.get('password', "Tc&Exp0#1385!")
         
-        # Target 1: Custom local path
+        # --- DESTINATION OPTIONS ---
+        # You can toggle these True/False to enable or disable specific destinations
+        self.use_digital_ocean = self.config.get('use_digital_ocean', False)
+        self.use_company_server = self.config.get('use_company_server', True)
+
+        # --- Company Server Path ---
+        # We use 'r' before the string to handle backslashes correctly in Windows paths
+        self.company_server_path = self.config.get('company_server_path', r"\\192.168.54.11\hr\@KakveyKet(Kai)")
+        
+        # Target 1: Custom local path (Optional)
         self.local_target_path = self.config.get('local_target_path', '')
-        # Target 2: Download folder path
+        # Target 2: Download folder path (Optional)
         self.local_download_path = self.config.get('local_download_path', '')
 
         self.start_index = int(self.config.get('start_index', 0))
@@ -149,6 +159,104 @@ class AutoDownloadBot:
                     if file != 'archive.zip':
                         zipf.write(os.path.join(root, file), file)
         return zip_filename
+
+
+    def _upload_to_sftp(self, local_path, remote_filename):
+        """Uploads ZIP to Server, Unzips it, then Deletes the ZIP."""
+        # --- CONFIGURATION ---
+        hostname = "68.183.225.187"
+        username = "root"
+        
+        # --- PASSWORD ---
+        server_password = "KakVey1417@Ket" 
+        
+        remote_dir = "/root/downloads"
+        
+        print(f"🚀 Starting SFTP Upload to {hostname} (Password Auth)...")
+        
+        try:
+            # Initialize SSH Client
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            # Connect using PASSWORD
+            ssh.connect(hostname, username=username, password=server_password)
+            
+            # Open SFTP
+            sftp = ssh.open_sftp()
+            
+            # Ensure remote directory exists
+            try:
+                sftp.chdir(remote_dir)
+            except IOError:
+                sftp.mkdir(remote_dir)
+                sftp.chdir(remote_dir)
+            
+            # 1. Upload the ZIP file first (It's faster to upload 1 zip than 100 files)
+            remote_zip_path = f"{remote_dir}/{remote_filename}"
+            print(f"Uploading ZIP to {remote_zip_path}...")
+            sftp.put(local_path, remote_zip_path)
+            
+            sftp.close() # Close SFTP, keep SSH open for commands
+            
+            # 2. Extract (Unzip) on the Server
+            # Create a dedicated folder for these files so they don't get mixed up
+            # e.g. "Invoices_123"
+            folder_name = os.path.splitext(remote_filename)[0]
+            extract_path = f"{remote_dir}/{folder_name}"
+            
+            print(f"📂 Extracting files to server folder: {extract_path}...")
+            
+            # Command: Install unzip (if missing) -> Create Folder -> Unzip -> Remove Zip
+            # This ensures you get "extraction auto not zip"
+            command = (
+                f"apt-get install -y unzip && "
+                f"mkdir -p '{extract_path}' && "
+                f"unzip -o '{remote_zip_path}' -d '{extract_path}' && "
+                f"rm '{remote_zip_path}'"
+            )
+            
+            # Execute command on DigitalOcean
+            stdin, stdout, stderr = ssh.exec_command(command)
+            exit_status = stdout.channel.recv_exit_status()
+            
+            ssh.close()
+
+            if exit_status == 0:
+                print(f"✅ Extraction Success! Files are ready in {extract_path}")
+                return True, f"Uploaded & Extracted to: {extract_path}"
+            else:
+                error = stderr.read().decode().strip()
+                print(f"⚠️ Extraction Warning: {error}")
+                return True, f"Uploaded Zip (Extraction failed: {error})"
+
+        except Exception as e:
+            error_msg = f"SFTP/SSH Failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
+
+    def _extract_locally(self, zip_path, destination_root, target_zip_name, location_name="Local"):
+        """Helper to unzip files locally (or to network share)"""
+        try:
+            if not os.path.exists(destination_root):
+                print(f"Path not found: {destination_root}")
+                return f"Failed: {location_name} path not found"
+
+            # Create a subfolder based on the zip name
+            folder_name = os.path.splitext(target_zip_name)[0]
+            extract_dest = os.path.join(destination_root, folder_name)
+            
+            if not os.path.exists(extract_dest):
+                os.makedirs(extract_dest)
+            
+            print(f"Extracting to {location_name}: {extract_dest}")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dest)
+            
+            return f"Extracted to {location_name}"
+        except Exception as e:
+            print(f"Error extracting to {location_name}: {e}")
+            return f"Failed: {location_name} extraction error"
 
     def _process_in_background(self):
         """Main logic loop: Opens browser, logs in, iterates invoices, downloads, and saves."""
@@ -405,47 +513,30 @@ class AutoDownloadBot:
             except: pass
 
             if zip_path and os.path.exists(zip_path):
-                # Target 0: SERVER (Cloud/Media) - Always backup
+                status_messages = []
+
+                # --- 1. SAVE TO DJANGO MODEL (BACKUP) ---
                 with open(zip_path, 'rb') as f:
                     self.order.generated_zip.save(target_zip_name, File(f))
-                
                 cloud_url = self.order.generated_zip.url
-                status_messages = ["Saved to Server"]
+                
+                # --- 2. UPLOAD TO DIGITALOCEAN SERVER (SFTP) ---
+                # This is the step that satisfies your requirement to store on 68.183.225.187
+                if self.use_digital_ocean:
+                    success, msg = self._upload_to_sftp(zip_path, target_zip_name)
+                    status_messages.append(msg)
 
-                # Target 1: CUSTOM LOCAL PATH
+                # --- 3. OPTIONAL LOCAL COPY (Can leave this if you still want it on Windows too) ---
                 if self.local_target_path:
-                    try:
-                        target_dir = os.path.normpath(self.local_target_path)
-                        if os.path.exists(target_dir) and os.path.isdir(target_dir):
-                            final_dest = os.path.join(target_dir, target_zip_name)
-                            shutil.copy2(zip_path, final_dest)
-                            status_messages.append(f"Saved to {self.local_target_path}")
-                        else:
-                            print(f"Directory not found: {self.local_target_path}")
-                            status_messages.append("Failed: Target 1 not found")
-                    except Exception as e:
-                        print(f"Error saving to {self.local_target_path}: {e}")
-                        status_messages.append("Failed: Target 1 error")
-
-                # Target 2: DOWNLOAD PATH
-                if self.local_download_path:
-                    try:
-                        download_dir = os.path.normpath(self.local_download_path)
-                        if os.path.exists(download_dir) and os.path.isdir(download_dir):
-                            final_dl_dest = os.path.join(download_dir, target_zip_name)
-                            shutil.copy2(zip_path, final_dl_dest)
-                            status_messages.append(f"Saved to Downloads")
-                        else:
-                            print(f"Download directory not found: {self.local_download_path}")
-                            status_messages.append("Failed: Downloads folder not found")
-                    except Exception as e:
-                        print(f"Error saving to {self.local_download_path}: {e}")
-                        status_messages.append("Failed: Downloads folder error")
-
-                # 3. CLEANUP TEMP
-                try:
-                    shutil.rmtree(self.download_dir)
-                except: pass
+                    # UPDATED: Now Extracts instead of Copies
+                    msg = self._extract_locally(zip_path, os.path.normpath(self.local_target_path), target_zip_name, "Local Folder")
+                    status_messages.append(msg)
+                
+                # --- 4. COMPANY SERVER COPY (SMB/Network Share) ---
+                if self.use_company_server and self.company_server_path:
+                    # UPDATED: Now Extracts instead of Copies
+                    msg = self._extract_locally(zip_path, self.company_server_path, target_zip_name, "Company Server")
+                    status_messages.append(msg)
 
                 # Combine messages
                 status_msg = " | ".join(status_messages)
@@ -465,7 +556,11 @@ class AutoDownloadBot:
             
             self.order.save()
             
-            # Optional: Close browser when done
+            # 5. Cleanup Temp Folder
+            try:
+                shutil.rmtree(self.download_dir)
+            except: pass
+
             if driver: driver.quit()
 
         except Exception as e:
