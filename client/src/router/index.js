@@ -1,4 +1,3 @@
-
 import { createRouter, createWebHistory } from "vue-router";
 import Login from "@/pages/Login.vue";
 import HomeView from "@/pages/HomeView.vue";
@@ -15,6 +14,8 @@ import TotalDownloadReport from "@/pages/TotalDownloadReport.vue";
 import SecretAdmin from "@/pages/SecretAdmin.vue";
 import NotFound from "@/pages/NotFound.vue";
 import UploadFile from "@/pages/UploadFile.vue";
+import Register from "@/pages/Register.vue";
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -24,18 +25,25 @@ const router = createRouter({
       component: Login,
       meta: { requiresAuth: false },
     },
-     {
-        path: "/secret-admin-recovery",
-        name: "SecretAdmin",
-        component: SecretAdmin,
-        meta: { requiresAuth: false } 
+    {
+      path: "/register",
+      name: "Register",
+      component: Register,
+      meta: { requiresAuth: false },
+    },
+
+    {
+      path: "/secret-admin-recovery",
+      name: "SecretAdmin",
+      component: SecretAdmin,
+      meta: { requiresAuth: false },
     },
     {
       path: "/",
       name: "main_layout",
       redirect: "/dashboard",
       component: MainLayout,
-      meta: { requiresAuth: true }, 
+      meta: { requiresAuth: true },
       children: [
         {
           path: "dashboard",
@@ -47,7 +55,7 @@ const router = createRouter({
           path: "users",
           name: "User",
           component: User,
-          meta: { roles: ['admin'] } // Only Admin
+          meta: { roles: ["admin"] }, // Only Admin
         },
         {
           path: "forwarders",
@@ -65,7 +73,7 @@ const router = createRouter({
           path: "settings",
           name: "Settings",
           component: Settings,
-          meta: { roles: ['admin'] } // Only Admin
+          meta: { roles: ["admin"] }, // Only Admin
         },
         // --- SHARED ROUTES ---
         {
@@ -79,7 +87,7 @@ const router = createRouter({
           component: ImportList,
         },
         {
-          path: "total-report", 
+          path: "total-report",
           name: "TotalDownloadReport",
           component: TotalDownloadReport,
         },
@@ -89,16 +97,15 @@ const router = createRouter({
           component: AutoDownloadBot,
         },
         {
-            path: "invoice-report",
-            name: "InvoiceReport",
-            component: InvoiceReport,
+          path: "invoice-report",
+          name: "InvoiceReport",
+          component: InvoiceReport,
         },
         {
           path: "upload-file",
           name: "UploadFile",
           component: UploadFile,
         },
-        
       ],
     },
     {
@@ -132,7 +139,7 @@ function parseJwt(token) {
 function isTokenExpired(token) {
   const payload = parseJwt(token);
   if (!payload) return true;
-  
+
   const currentTime = Math.floor(Date.now() / 1000);
   return currentTime > payload.exp;
 }
@@ -158,14 +165,14 @@ router.isReady().then(() => {
 
 // --- AUTH & ROLE GUARD ---
 router.beforeEach((to, from, next) => {
-  const requiresAuth = to.matched.some(record => record.meta.requiresAuth);
+  const requiresAuth = to.matched.some((record) => record.meta.requiresAuth);
   const token = localStorage.getItem("access_token");
 
   if (requiresAuth) {
     // 1. Validate Token Existance & Expiry
     if (!token || isTokenExpired(token)) {
-      localStorage.removeItem("access_token"); 
-      localStorage.removeItem("refresh_token"); 
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
       return next("/login");
     }
 
@@ -173,24 +180,25 @@ router.beforeEach((to, from, next) => {
     // Check if the route has specific role requirements
     const requiredRoles = to.meta.roles;
     if (requiredRoles) {
-        const payload = parseJwt(token);
-        const userRole = payload.role || payload.user_role || 'user'; 
-        
-        console.log(`Navigating to ${to.path}. Required: ${requiredRoles}, User Role: ${userRole}`);
+      const payload = parseJwt(token);
+      const userRole = payload.role || payload.user_role || "user";
 
-        if (!requiredRoles.includes(userRole)) {
-            // alert("Access Denied: Admins Only");
-            return next('/dashboard');
-        }
+      console.log(
+        `Navigating to ${to.path}. Required: ${requiredRoles}, User Role: ${userRole}`
+      );
+
+      if (!requiredRoles.includes(userRole)) {
+        // alert("Access Denied: Admins Only");
+        return next("/dashboard");
+      }
     }
-    
+
     // 3. Allow Access
     next();
-
   } else {
     // 4. Public Routes logic
-    if (to.path === '/login' && token && !isTokenExpired(token)) {
-      next('/dashboard');
+    if (to.path === "/login" && token && !isTokenExpired(token)) {
+      next("/dashboard");
     } else {
       next();
     }
